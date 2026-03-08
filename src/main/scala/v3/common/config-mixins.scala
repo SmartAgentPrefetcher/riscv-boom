@@ -42,6 +42,26 @@ class WithBoomBranchPrintf extends Config((site, here, up) => {
   }
 })
 
+class WithBoomTMACounters extends Config((site, here, up) => {
+  case TilesLocated(InSubsystem) => up(TilesLocated(InSubsystem), site) map {
+    case tp: BoomTileAttachParams => tp.copy(tileParams = tp.tileParams.copy(core = tp.tileParams.core.copy(
+      enableTMACounters = true
+    )))
+    case other => other
+  }
+})
+
+// Enable DPI-C based TMA counter dump at simulation end.
+// Only use in Verilator/VCS simulation configs — not for FPGA, FireSim, or ASIC.
+class WithBoomTMASimDump extends Config((site, here, up) => {
+  case TilesLocated(InSubsystem) => up(TilesLocated(InSubsystem), site) map {
+    case tp: BoomTileAttachParams => tp.copy(tileParams = tp.tileParams.copy(core = tp.tileParams.core.copy(
+      enableTMASimDump = true
+    )))
+    case other => other
+  }
+})
+
 class WithNBoomPerfCounters(n: Int) extends Config((site, here, up) => {
   case TilesLocated(InSubsystem) => up(TilesLocated(InSubsystem), site) map {
     case tp: BoomTileAttachParams => tp.copy(tileParams = tp.tileParams.copy(core = tp.tileParams.core.copy(

@@ -86,6 +86,9 @@ class BoomTile private(
   val masterNode = TLIdentityNode()
   val slaveNode = TLIdentityNode()
 
+  // Connect slaveNode to the slave crossbar (needed for MMIO devices inside the tile)
+  DisableMonitors { implicit p => tlSlaveXbar.node :*= slaveNode }
+
   val tile_master_blocker =
     tileParams.blockerCtrlAddr
       .map(BasicBusBlockerParams(_, xBytes, masterPortBeatBytes, deadlock = true))
@@ -145,6 +148,14 @@ class BoomTile private(
   val roccs = p(BuildRoCC).map(_(p))
   roccs.map(_.atlNode).foreach { atl => tlMasterXbar.node :=* atl }
   roccs.map(_.tlNode).foreach { tl => tlOtherMastersNode :=* tl }
+
+  // TMA Performance Counter MMIO Device (optional)
+  val perfCounterDevice = if (boomParams.core.enableTMACounters) {
+    val params = BoomPerfCounterParams(address = 0x10030000L + tileId * 0x1000L)
+    val dev = LazyModule(new BoomPerfCounterDevice(params, xBytes))
+    connectTLSlave(dev.node, xBytes)
+    Some(dev)
+  } else None
 }
 
 /**
@@ -242,6 +253,25 @@ class BoomTileModuleImp(outer: BoomTile) extends BaseTileModuleImp(outer){
   hellaCacheArb.io.requestor <> hellaCachePorts.toSeq
   lsu.io.hellacache <> hellaCacheArb.io.mem
   outer.dcache.module.io.lsu <> lsu.io.dmem
+
+  // TMA Performance Counter MMIO wiring
+  outer.perfCounterDevice.foreach { dev =>
+    core.io.tma_counters.foreach { ctrs =>
+      dev.module.io.counters := ctrs
+    }
+  }
+
+  // DPI-C counter dump at simulation end (gated by +dump-tma-counters plusarg)
+  // Only instantiated when enableTMASimDump is true (Verilator/VCS only).
+  // Do NOT enable for FPGA, FireSim, or ASIC flows — DPI-C is unsupported.
+  if (outer.boomParams.core.enableTMASimDump) {
+    core.io.tma_counters.foreach { ctrs =>
+      val dump = Module(new SimTMACounterDump(BoomPerfCounterConsts.NUM_COUNTERS, outer.tileId))
+      dump.io.clock := clock
+      dump.io.reset := reset.asBool
+      dump.io.counters := ctrs
+    }
+  }
 
   // Generate a descriptive string
   val frontendStr = outer.frontend.module.toString
