@@ -61,6 +61,8 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     val ptw_tlb = new freechips.rocketchip.rocket.TLBPTWIO()
     val trace = Output(new TraceBundle)
     val fcsr_rm = UInt(freechips.rocketchip.tile.FPConstants.RM_SZ.W)
+    val tma_counters = if (boomParams.enableTMACounters)
+      Some(Output(Vec(BoomPerfCounterConsts.NUM_COUNTERS, UInt(xLen.W)))) else None
   })
 
   io.ptw_tlb := DontCare
@@ -161,6 +163,8 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   val dec_ready  = Wire(Bool())
   val dec_xcpts  = Wire(Vec(coreWidth, Bool()))
   val ren_stalls = Wire(Vec(coreWidth, Bool()))
+  val branch_mask_full = Wire(Vec(coreWidth, Bool()))
+  val dec_finished_mask = RegInit(0.U(coreWidth.W))
 
   // Rename2/Dispatch stage
   val dis_valids = Wire(Vec(coreWidth, Bool()))
@@ -244,30 +248,117 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   //-------------------------------------------------------------
   // Uarch Hardware Performance Events (HPEs)
 
+  // Helper: is the pipeline in a recovery/flush state where no useful work happens?
+  val tma_in_recovery = rob.io.commit.rollback ||
+                        brupdate.b2.mispredict ||
+                        io.ifu.redirect_flush ||
+                        rob.io.flush.valid
+
+  // Detect branch misprediction vs other machine clears for TMA L2
+  val tma_is_branch_mispredict_recovery = brupdate.b2.mispredict || rob.io.commit.rollback
+  val tma_is_machine_clear = rob.io.flush.valid && !brupdate.b2.mispredict
+
+  // Detect fetch buffer delivering valid uops to decode
+  val tma_fetch_valid = io.ifu.fetchpacket.valid
+
+  // Detect memory-related backend stalls (any slot blocked by LSU)
+  val tma_memory_stall = (0 until coreWidth).map(w =>
+    dis_valids(w) && (
+      (io.lsu.ldq_full(w) && dis_uops(w).uses_ldq) ||
+      (io.lsu.stq_full(w) && dis_uops(w).uses_stq)
+    )).reduce(_||_)
+
+  // Instruction mix signals at retire
+  // Note: ctrl.is_load/is_sta/is_std are set during register-read (after ROB enqueue),
+  // so they are NOT valid at commit time. Use uses_ldq/uses_stq instead.
+  val tma_retired_loads = PopCount(VecInit((0 until coreWidth) map { w =>
+    rob.io.commit.arch_valids(w) && rob.io.commit.uops(w).uses_ldq }))
+  val tma_retired_stores = PopCount(VecInit((0 until coreWidth) map { w =>
+    rob.io.commit.arch_valids(w) && rob.io.commit.uops(w).uses_stq }))
+  val tma_retired_branches = PopCount(VecInit((0 until coreWidth) map { w =>
+    rob.io.commit.arch_valids(w) && rob.io.commit.uops(w).is_br }))
+  val tma_retired_jals = PopCount(VecInit((0 until coreWidth) map { w =>
+    rob.io.commit.arch_valids(w) && rob.io.commit.uops(w).is_jal }))
+  val tma_retired_jalrs = PopCount(VecInit((0 until coreWidth) map { w =>
+    rob.io.commit.arch_valids(w) && rob.io.commit.uops(w).is_jalr }))
+  val tma_retired_fp = PopCount(VecInit((0 until coreWidth) map { w =>
+    rob.io.commit.arch_valids(w) && rob.io.commit.uops(w).fp_val }))
+  val tma_retired_amo = PopCount(VecInit((0 until coreWidth) map { w =>
+    rob.io.commit.arch_valids(w) && rob.io.commit.uops(w).is_amo }))
+  val tma_retired_system = PopCount(VecInit((0 until coreWidth) map { w =>
+    rob.io.commit.arch_valids(w) && rob.io.commit.uops(w).is_unique }))
+
+  // Stall reason signals
+  val tma_rob_full       = !rob.io.ready
+  val tma_ldq_full       = io.lsu.ldq_full.reduce(_||_)
+  val tma_stq_full       = io.lsu.stq_full.reduce(_||_)
+  val tma_int_iq_full    = !int_iss_unit.io.dis_uops(0).ready
+  val tma_mem_iq_full    = !mem_iss_unit.io.dis_uops(0).ready
+  val tma_branch_mask_full_any = branch_mask_full.reduce(_||_)
+  val tma_ren_stall_any  = ren_stalls.reduce(_||_)
+
+  // Branch predictor source tracking at retire
+  val tma_br_correct_bpd = PopCount(VecInit((0 until coreWidth) map { w =>
+    rob.io.commit.arch_valids(w) && rob.io.commit.uops(w).is_br &&
+    !rob.io.commit.uops(w).taken && // not mispredicted (if taken was set correctly at commit)
+    (rob.io.commit.uops(w).debug_fsrc === BSRC_2) }))
+  val tma_br_correct_btb = PopCount(VecInit((0 until coreWidth) map { w =>
+    rob.io.commit.arch_valids(w) && rob.io.commit.uops(w).is_br &&
+    (rob.io.commit.uops(w).debug_fsrc === BSRC_1) }))
+
   val perfEvents = new freechips.rocketchip.rocket.EventSets(Seq(
+    // EventSet 0: Exceptions and basic events
     new freechips.rocketchip.rocket.EventSet((mask, hits) => (mask & hits).orR, Seq(
-      ("exception", () => rob.io.com_xcpt.valid),
-      ("nop",       () => false.B),
-      ("nop",       () => false.B),
-      ("nop",       () => false.B))),
-
-    new freechips.rocketchip.rocket.EventSet((mask, hits) => (mask & hits).orR, Seq(
-//      ("I$ blocked",                        () => icache_blocked),
-      ("nop",                               () => false.B),
-      ("branch misprediction",              () => b2.mispredict),
-      ("control-flow target misprediction", () => b2.mispredict &&
-                                                  b2.cfi_type === CFI_JALR),
+      ("exception",                         () => rob.io.com_xcpt.valid),
       ("flush",                             () => rob.io.flush.valid),
-      ("branch resolved",                   () => b2.valid)
-    )),
+      ("branch resolved",                   () => b2.valid),
+      ("nop",                               () => false.B))),
 
+    // EventSet 1: Branch prediction events
+    new freechips.rocketchip.rocket.EventSet((mask, hits) => (mask & hits).orR, Seq(
+      ("branch misprediction",              () => b2.mispredict),
+      ("control-flow target misprediction", () => b2.mispredict && b2.cfi_type === CFI_JALR),
+      ("branch mispredict from BPD",        () => b2.mispredict && b2.uop.debug_fsrc === BSRC_2),
+      ("branch mispredict from BTB",        () => b2.mispredict && b2.uop.debug_fsrc === BSRC_1))),
+
+    // EventSet 2: Cache and TLB events
     new freechips.rocketchip.rocket.EventSet((mask, hits) => (mask & hits).orR, Seq(
       ("I$ miss",     () => io.ifu.perf.acquire),
       ("D$ miss",     () => io.lsu.perf.acquire),
       ("D$ release",  () => io.lsu.perf.release),
       ("ITLB miss",   () => io.ifu.perf.tlbMiss),
       ("DTLB miss",   () => io.lsu.perf.tlbMiss),
-      ("L2 TLB miss", () => io.ptw.perf.l2miss)))))
+      ("L2 TLB miss", () => io.ptw.perf.l2miss))),
+
+    // EventSet 3: Instruction mix at retire
+    new freechips.rocketchip.rocket.EventSet((mask, hits) => (mask & hits).orR, Seq(
+      ("retired loads",    () => tma_retired_loads > 0.U),
+      ("retired stores",   () => tma_retired_stores > 0.U),
+      ("retired branches", () => tma_retired_branches > 0.U),
+      ("retired jals",     () => tma_retired_jals > 0.U),
+      ("retired jalrs",    () => tma_retired_jalrs > 0.U),
+      ("retired fp",       () => tma_retired_fp > 0.U),
+      ("retired amo",      () => tma_retired_amo > 0.U),
+      ("retired system",   () => tma_retired_system > 0.U))),
+
+    // EventSet 4: Backend stall reasons (cycle-level)
+    new freechips.rocketchip.rocket.EventSet((mask, hits) => (mask & hits).orR, Seq(
+      ("ROB full",              () => tma_rob_full),
+      ("LDQ full",              () => tma_ldq_full),
+      ("STQ full",              () => tma_stq_full),
+      ("int IQ full",           () => tma_int_iq_full),
+      ("mem IQ full",           () => tma_mem_iq_full),
+      ("branch mask full",      () => tma_branch_mask_full_any),
+      ("rename stall",          () => tma_ren_stall_any),
+      ("pipeline flush",        () => rob.io.flush.valid))),
+
+    // EventSet 5: Frontend events (cycle-level)
+    new freechips.rocketchip.rocket.EventSet((mask, hits) => (mask & hits).orR, Seq(
+      ("fetch buffer empty",    () => !tma_fetch_valid && !tma_in_recovery),
+      ("rollback cycles",       () => rob.io.commit.rollback),
+      ("recovery cycles",       () => tma_in_recovery),
+      ("dispatch ready",        () => dis_ready)))))
+
   val csr = Module(new freechips.rocketchip.rocket.CSRFile(perfEvents, boomParams.customCSRs.decls))
   csr.io.inst foreach { c => c := DontCare }
   csr.io.rocc_interrupt := io.rocc.interrupt
@@ -278,8 +369,6 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
 
   (custom_csrs.csrs zip csr.io.customCSRs).map { case (lhs, rhs) => lhs <> rhs }
 
-  //val icache_blocked = !(io.ifu.fetchpacket.valid || RegNext(io.ifu.fetchpacket.valid))
-  val icache_blocked = false.B
   csr.io.counters foreach { c => c.inc := RegNext(perfEvents.evaluate(c.eventSel)) }
 
   //****************************************
@@ -492,8 +581,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   // track mask of finished instructions in the bundle
   // use this to mask out insts coming from FetchBuffer that have been finished
   // for example, back pressure may cause us to only issue some instructions from FetchBuffer
-  // but on the next cycle, we only want to retry a subset
-  val dec_finished_mask = RegInit(0.U(coreWidth.W))
+  // but on the next cycle, we only want to retry a subset (dec_finished_mask declared earlier for TMA)
 
   //-------------------------------------------------------------
   // Pull out instructions and send to the Decoders
@@ -565,8 +653,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
 
   dec_xcpts := dec_uops zip dec_valids map {case (u,v) => u.exception && v}
   val dec_xcpt_stall = dec_xcpts.reduce(_||_) && !xcpt_pc_req.ready
-  // stall fetch/dcode because we ran out of branch tags
-  val branch_mask_full = Wire(Vec(coreWidth, Bool()))
+  // stall fetch/dcode because we ran out of branch tags (Wire declared earlier for TMA)
 
   val dec_hazards = (0 until coreWidth).map(w =>
                       dec_valids(w) &&
@@ -605,6 +692,252 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   }
 
   branch_mask_full := dec_brmask_logic.io.is_full
+
+  //****************************************
+  // TMA (Top-Down Microarchitectural Analysis) Counters
+  // Always-on 64-bit counters for slot-based TMA accounting.
+  // Gated by enableTMACounters parameter.
+  // Placed here because it needs dec_stalls, dec_finished_mask, branch_mask_full etc.
+
+  if (boomParams.enableTMACounters) {
+    //------------------------------------------------------
+    // TMA Level 1: classify each pipeline slot each cycle
+    val tma_slot_retiring       = Wire(Vec(coreWidth, Bool()))
+    val tma_slot_bad_spec       = Wire(Vec(coreWidth, Bool()))
+    val tma_slot_frontend_bound = Wire(Vec(coreWidth, Bool()))
+    val tma_slot_backend_bound  = Wire(Vec(coreWidth, Bool()))
+
+    for (w <- 0 until coreWidth) {
+      when (tma_in_recovery) {
+        tma_slot_retiring(w)       := false.B
+        tma_slot_bad_spec(w)       := true.B
+        tma_slot_frontend_bound(w) := false.B
+        tma_slot_backend_bound(w)  := false.B
+      } .elsewhen (!dec_valids(w) && !dec_finished_mask(w)) {
+        tma_slot_retiring(w)       := false.B
+        tma_slot_bad_spec(w)       := false.B
+        tma_slot_frontend_bound(w) := dis_ready
+        tma_slot_backend_bound(w)  := !dis_ready
+      } .elsewhen (dec_valids(w) && dec_stalls(w)) {
+        tma_slot_retiring(w)       := false.B
+        tma_slot_bad_spec(w)       := false.B
+        tma_slot_frontend_bound(w) := false.B
+        tma_slot_backend_bound(w)  := true.B
+      } .otherwise {
+        tma_slot_retiring(w)       := true.B
+        tma_slot_bad_spec(w)       := false.B
+        tma_slot_frontend_bound(w) := false.B
+        tma_slot_backend_bound(w)  := false.B
+      }
+    }
+
+    // TMA L1 counters
+    val tma_ctr_retiring       = RegInit(0.U(xLen.W))
+    val tma_ctr_bad_spec       = RegInit(0.U(xLen.W))
+    val tma_ctr_frontend_bound = RegInit(0.U(xLen.W))
+    val tma_ctr_backend_bound  = RegInit(0.U(xLen.W))
+
+    tma_ctr_retiring       := tma_ctr_retiring       + PopCount(tma_slot_retiring.asUInt)
+    tma_ctr_bad_spec       := tma_ctr_bad_spec       + PopCount(tma_slot_bad_spec.asUInt)
+    tma_ctr_frontend_bound := tma_ctr_frontend_bound + PopCount(tma_slot_frontend_bound.asUInt)
+    tma_ctr_backend_bound  := tma_ctr_backend_bound  + PopCount(tma_slot_backend_bound.asUInt)
+
+    dontTouch(tma_ctr_retiring)
+    dontTouch(tma_ctr_bad_spec)
+    dontTouch(tma_ctr_frontend_bound)
+    dontTouch(tma_ctr_backend_bound)
+
+    // TMA Level 2 counters
+    val tma_ctr_fetch_latency   = RegInit(0.U(xLen.W))
+    val tma_ctr_fetch_bandwidth = RegInit(0.U(xLen.W))
+
+    val frontend_slots_this_cycle = PopCount(tma_slot_frontend_bound.asUInt)
+    when (!tma_in_recovery && !tma_fetch_valid) {
+      tma_ctr_fetch_latency := tma_ctr_fetch_latency + frontend_slots_this_cycle
+    } .elsewhen (!tma_in_recovery && tma_fetch_valid && frontend_slots_this_cycle > 0.U) {
+      tma_ctr_fetch_bandwidth := tma_ctr_fetch_bandwidth + frontend_slots_this_cycle
+    }
+
+    dontTouch(tma_ctr_fetch_latency)
+    dontTouch(tma_ctr_fetch_bandwidth)
+
+    val tma_ctr_branch_mispredict = RegInit(0.U(xLen.W))
+    val tma_ctr_machine_clears   = RegInit(0.U(xLen.W))
+
+    when (tma_in_recovery) {
+      when (tma_is_branch_mispredict_recovery) {
+        tma_ctr_branch_mispredict := tma_ctr_branch_mispredict + coreWidth.U
+      } .otherwise {
+        tma_ctr_machine_clears := tma_ctr_machine_clears + coreWidth.U
+      }
+    }
+
+    dontTouch(tma_ctr_branch_mispredict)
+    dontTouch(tma_ctr_machine_clears)
+
+    val tma_ctr_memory_bound = RegInit(0.U(xLen.W))
+    val tma_ctr_core_bound   = RegInit(0.U(xLen.W))
+
+    // Use PopCount to correctly count across all slots (`:=` in a for loop
+    // would only keep the last slot's increment due to last-connect semantics)
+    val mem_bound_slots = PopCount(VecInit((0 until coreWidth).map { w =>
+      tma_slot_backend_bound(w) && dis_valids(w) && (
+        (io.lsu.ldq_full(w) && dis_uops(w).uses_ldq) ||
+        (io.lsu.stq_full(w) && dis_uops(w).uses_stq) ||
+        tma_mem_iq_full)
+    }))
+    tma_ctr_memory_bound := tma_ctr_memory_bound + mem_bound_slots
+    tma_ctr_core_bound   := tma_ctr_core_bound + (PopCount(tma_slot_backend_bound.asUInt) - mem_bound_slots)
+
+    dontTouch(tma_ctr_memory_bound)
+    dontTouch(tma_ctr_core_bound)
+
+    // Instruction mix at retire
+    val tma_ctr_retired_loads    = RegInit(0.U(xLen.W))
+    val tma_ctr_retired_stores   = RegInit(0.U(xLen.W))
+    val tma_ctr_retired_branches = RegInit(0.U(xLen.W))
+    val tma_ctr_retired_jals     = RegInit(0.U(xLen.W))
+    val tma_ctr_retired_jalrs    = RegInit(0.U(xLen.W))
+    val tma_ctr_retired_fp       = RegInit(0.U(xLen.W))
+    val tma_ctr_retired_amo      = RegInit(0.U(xLen.W))
+    val tma_ctr_retired_system   = RegInit(0.U(xLen.W))
+
+    tma_ctr_retired_loads    := tma_ctr_retired_loads    + tma_retired_loads
+    tma_ctr_retired_stores   := tma_ctr_retired_stores   + tma_retired_stores
+    tma_ctr_retired_branches := tma_ctr_retired_branches + tma_retired_branches
+    tma_ctr_retired_jals     := tma_ctr_retired_jals     + tma_retired_jals
+    tma_ctr_retired_jalrs    := tma_ctr_retired_jalrs    + tma_retired_jalrs
+    tma_ctr_retired_fp       := tma_ctr_retired_fp       + tma_retired_fp
+    tma_ctr_retired_amo      := tma_ctr_retired_amo      + tma_retired_amo
+    tma_ctr_retired_system   := tma_ctr_retired_system   + tma_retired_system
+
+    dontTouch(tma_ctr_retired_loads)
+    dontTouch(tma_ctr_retired_stores)
+    dontTouch(tma_ctr_retired_branches)
+    dontTouch(tma_ctr_retired_jals)
+    dontTouch(tma_ctr_retired_jalrs)
+    dontTouch(tma_ctr_retired_fp)
+    dontTouch(tma_ctr_retired_amo)
+    dontTouch(tma_ctr_retired_system)
+
+    // Stall reason counters
+    val tma_ctr_rob_full          = RegInit(0.U(xLen.W))
+    val tma_ctr_ldq_full          = RegInit(0.U(xLen.W))
+    val tma_ctr_stq_full          = RegInit(0.U(xLen.W))
+    val tma_ctr_int_iq_full       = RegInit(0.U(xLen.W))
+    val tma_ctr_mem_iq_full       = RegInit(0.U(xLen.W))
+    val tma_ctr_branch_mask_full  = RegInit(0.U(xLen.W))
+    val tma_ctr_rename_stall      = RegInit(0.U(xLen.W))
+    val tma_ctr_flush_cycles      = RegInit(0.U(xLen.W))
+    val tma_ctr_rollback_cycles   = RegInit(0.U(xLen.W))
+
+    tma_ctr_rob_full         := tma_ctr_rob_full         + tma_rob_full
+    tma_ctr_ldq_full         := tma_ctr_ldq_full         + tma_ldq_full
+    tma_ctr_stq_full         := tma_ctr_stq_full         + tma_stq_full
+    tma_ctr_int_iq_full      := tma_ctr_int_iq_full      + tma_int_iq_full
+    tma_ctr_mem_iq_full      := tma_ctr_mem_iq_full      + tma_mem_iq_full
+    tma_ctr_branch_mask_full := tma_ctr_branch_mask_full + tma_branch_mask_full_any
+    tma_ctr_rename_stall     := tma_ctr_rename_stall     + tma_ren_stall_any
+    tma_ctr_flush_cycles     := tma_ctr_flush_cycles     + rob.io.flush.valid
+    tma_ctr_rollback_cycles  := tma_ctr_rollback_cycles  + rob.io.commit.rollback
+
+    dontTouch(tma_ctr_rob_full)
+    dontTouch(tma_ctr_ldq_full)
+    dontTouch(tma_ctr_stq_full)
+    dontTouch(tma_ctr_int_iq_full)
+    dontTouch(tma_ctr_mem_iq_full)
+    dontTouch(tma_ctr_branch_mask_full)
+    dontTouch(tma_ctr_rename_stall)
+    dontTouch(tma_ctr_flush_cycles)
+    dontTouch(tma_ctr_rollback_cycles)
+
+    // Cache/TLB event counters
+    val tma_ctr_icache_miss  = RegInit(0.U(xLen.W))
+    val tma_ctr_dcache_miss  = RegInit(0.U(xLen.W))
+    val tma_ctr_dcache_rel   = RegInit(0.U(xLen.W))
+    val tma_ctr_itlb_miss    = RegInit(0.U(xLen.W))
+    val tma_ctr_dtlb_miss    = RegInit(0.U(xLen.W))
+    val tma_ctr_l2tlb_miss   = RegInit(0.U(xLen.W))
+
+    tma_ctr_icache_miss := tma_ctr_icache_miss + io.ifu.perf.acquire
+    tma_ctr_dcache_miss := tma_ctr_dcache_miss + io.lsu.perf.acquire
+    tma_ctr_dcache_rel  := tma_ctr_dcache_rel  + io.lsu.perf.release
+    tma_ctr_itlb_miss   := tma_ctr_itlb_miss   + io.ifu.perf.tlbMiss
+    tma_ctr_dtlb_miss   := tma_ctr_dtlb_miss   + io.lsu.perf.tlbMiss
+    tma_ctr_l2tlb_miss  := tma_ctr_l2tlb_miss  + io.ptw.perf.l2miss
+
+    dontTouch(tma_ctr_icache_miss)
+    dontTouch(tma_ctr_dcache_miss)
+    dontTouch(tma_ctr_dcache_rel)
+    dontTouch(tma_ctr_itlb_miss)
+    dontTouch(tma_ctr_dtlb_miss)
+    dontTouch(tma_ctr_l2tlb_miss)
+
+    // Branch prediction source counters
+    val tma_ctr_br_mispredict      = RegInit(0.U(xLen.W))
+    val tma_ctr_br_resolve         = RegInit(0.U(xLen.W))
+    val tma_ctr_jalr_mispredict    = RegInit(0.U(xLen.W))
+    val tma_ctr_br_mispred_bpd     = RegInit(0.U(xLen.W))
+    val tma_ctr_br_mispred_btb     = RegInit(0.U(xLen.W))
+
+    // b2.valid is never set in BOOM v3 — b2 only captures mispredict info.
+    // Use brinfos (per-ALU branch resolution outputs) for resolve counting.
+    tma_ctr_br_mispredict   := tma_ctr_br_mispredict   + b2.mispredict
+    tma_ctr_br_resolve      := tma_ctr_br_resolve      + PopCount(brinfos.map(_.valid))
+    tma_ctr_jalr_mispredict := tma_ctr_jalr_mispredict + (b2.mispredict && b2.cfi_type === CFI_JALR)
+    tma_ctr_br_mispred_bpd  := tma_ctr_br_mispred_bpd + (b2.mispredict && b2.uop.debug_fsrc === BSRC_2)
+    tma_ctr_br_mispred_btb  := tma_ctr_br_mispred_btb + (b2.mispredict && b2.uop.debug_fsrc === BSRC_1)
+
+    dontTouch(tma_ctr_br_mispredict)
+    dontTouch(tma_ctr_br_resolve)
+    dontTouch(tma_ctr_jalr_mispredict)
+    dontTouch(tma_ctr_br_mispred_bpd)
+    dontTouch(tma_ctr_br_mispred_btb)
+
+    // Populate MMIO counter output vector
+    io.tma_counters.get := VecInit(Seq(
+      debug_tsc_reg,                // 0: cycles
+      debug_irt_reg,                // 1: instret
+      tma_ctr_retiring,             // 2: tma_retiring
+      tma_ctr_bad_spec,             // 3: tma_bad_speculation
+      tma_ctr_frontend_bound,       // 4: tma_frontend_bound
+      tma_ctr_backend_bound,        // 5: tma_backend_bound
+      tma_ctr_fetch_latency,        // 6: tma_fetch_latency
+      tma_ctr_fetch_bandwidth,      // 7: tma_fetch_bandwidth
+      tma_ctr_branch_mispredict,    // 8: tma_branch_mispredict
+      tma_ctr_machine_clears,       // 9: tma_machine_clears
+      tma_ctr_memory_bound,         // 10: tma_memory_bound
+      tma_ctr_core_bound,           // 11: tma_core_bound
+      tma_ctr_retired_loads,        // 12: retired_loads
+      tma_ctr_retired_stores,       // 13: retired_stores
+      tma_ctr_retired_branches,     // 14: retired_branches
+      tma_ctr_retired_jals,         // 15: retired_jals
+      tma_ctr_retired_jalrs,        // 16: retired_jalrs
+      tma_ctr_retired_fp,           // 17: retired_fp
+      tma_ctr_retired_amo,          // 18: retired_amo
+      tma_ctr_retired_system,       // 19: retired_system
+      tma_ctr_rob_full,             // 20: rob_full_cycles
+      tma_ctr_ldq_full,             // 21: ldq_full_cycles
+      tma_ctr_stq_full,             // 22: stq_full_cycles
+      tma_ctr_int_iq_full,          // 23: int_iq_full_cycles
+      tma_ctr_mem_iq_full,          // 24: mem_iq_full_cycles
+      tma_ctr_branch_mask_full,     // 25: branch_mask_full_cycles
+      tma_ctr_rename_stall,         // 26: rename_stall_cycles
+      tma_ctr_flush_cycles,         // 27: flush_cycles
+      tma_ctr_rollback_cycles,      // 28: rollback_cycles
+      tma_ctr_icache_miss,          // 29: icache_miss
+      tma_ctr_dcache_miss,          // 30: dcache_miss
+      tma_ctr_dcache_rel,           // 31: dcache_release
+      tma_ctr_itlb_miss,            // 32: itlb_miss
+      tma_ctr_dtlb_miss,            // 33: dtlb_miss
+      tma_ctr_l2tlb_miss,           // 34: l2tlb_miss
+      tma_ctr_br_mispredict,        // 35: br_mispredict
+      tma_ctr_br_resolve,           // 36: br_resolve
+      tma_ctr_jalr_mispredict,      // 37: jalr_mispredict
+      tma_ctr_br_mispred_bpd,       // 38: br_mispredict_bpd
+      tma_ctr_br_mispred_btb        // 39: br_mispredict_btb
+    ))
+  } // end enableTMACounters
 
   //-------------------------------------------------------------
   //-------------------------------------------------------------
