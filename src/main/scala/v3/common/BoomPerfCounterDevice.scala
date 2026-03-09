@@ -6,6 +6,7 @@ import org.chipsalliance.cde.config.{Parameters, Field, Config}
 import freechips.rocketchip.diplomacy._
 import freechips.rocketchip.regmapper.{RegField, RegWriteFn}
 import freechips.rocketchip.tilelink._
+import midas.targetutils.SynthesizePrintf
 
 // Number of 64-bit counter registers exposed via MMIO
 // Layout (offsets in bytes):
