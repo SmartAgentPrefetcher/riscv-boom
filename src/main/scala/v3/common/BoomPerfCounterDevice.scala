@@ -114,11 +114,11 @@ class BoomPerfCounterDevice(params: BoomPerfCounterParams, beatBytes: Int)(impli
         "icache_miss", "dcache_miss", "dcache_release",
         "itlb_miss", "dtlb_miss", "l2tlb_miss",
         "br_mispredict", "br_resolve", "jalr_mispredict", "br_mispred_bpd", "br_mispred_btb")
-      printf("===== TMA PERFORMANCE COUNTERS =====\n")
+      SynthesizePrintf(printf("===== TMA PERFORMANCE COUNTERS =====\n"))
       for (i <- 0 until BoomPerfCounterConsts.NUM_COUNTERS) {
-        printf(cf"  ${names(i)}%24s = ${io.counters(i)}%d\n")
+        SynthesizePrintf(printf(s"  %24s = %%d\n".format(names(i)), io.counters(i)))
       }
-      printf("====================================\n")
+      SynthesizePrintf(printf("====================================\n"))
     }
 
     // Build register map: control at 0x000, then counters at 0x008, 0x010, ...
