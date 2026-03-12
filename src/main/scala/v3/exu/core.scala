@@ -165,6 +165,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   val ren_stalls = Wire(Vec(coreWidth, Bool()))
   val branch_mask_full = Wire(Vec(coreWidth, Bool()))
   val dec_finished_mask = RegInit(0.U(coreWidth.W))
+  val dec_unfinished_frontend_fault = RegInit(false.B)
 
   // Rename2/Dispatch stage
   val dis_valids = Wire(Vec(coreWidth, Bool()))
@@ -249,14 +250,19 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   // Uarch Hardware Performance Events (HPEs)
 
   // Helper: is the pipeline in a recovery/flush state where no useful work happens?
+  // Note: io.ifu.redirect_flush is intentionally excluded — it stays high for hundreds
+  // of cycles after a mispredict (via b1.mispredict_mask and flush_frontend). Post-redirect
+  // frontend stalls (icache refill, pipeline refill) should be classified as frontend_bound,
+  // not lumped into bad_speculation.
   val tma_in_recovery = rob.io.commit.rollback ||
                         brupdate.b2.mispredict ||
-                        io.ifu.redirect_flush ||
-                        rob.io.flush.valid
+                        rob.io.flush.valid ||
+                        RegNext(rob.io.flush.valid) ||
+                        RegNext(RegNext(rob.io.flush.valid))
 
   // Detect branch misprediction vs other machine clears for TMA L2
-  val tma_is_branch_mispredict_recovery = brupdate.b2.mispredict || rob.io.commit.rollback
-  val tma_is_machine_clear = rob.io.flush.valid && !brupdate.b2.mispredict
+  val tma_is_branch_mispredict_recovery = brupdate.b2.mispredict
+  val tma_is_machine_clear = tma_in_recovery && !brupdate.b2.mispredict
 
   // Detect fetch buffer delivering valid uops to decode
   val tma_fetch_valid = io.ifu.fetchpacket.valid
@@ -673,8 +679,10 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
 
   when (dec_ready || io.ifu.redirect_flush) {
     dec_finished_mask := 0.U
+    dec_unfinished_frontend_fault := false.B
   } .otherwise {
     dec_finished_mask := dec_fire.asUInt | dec_finished_mask
+    dec_unfinished_frontend_fault := !dec_stalls.last
   }
 
   //-------------------------------------------------------------
@@ -702,50 +710,79 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   if (boomParams.enableTMACounters) {
     //------------------------------------------------------
     // TMA Level 1: classify each pipeline slot each cycle
-    val tma_slot_retiring       = Wire(Vec(coreWidth, Bool()))
-    val tma_slot_bad_spec       = Wire(Vec(coreWidth, Bool()))
+    // Frontend/backend bound are classified at decode time (where the stall is observable).
+    // Retiring is counted at commit time (arch_valids) to match instret.
+    // Bad speculation is derived as the remainder to preserve the tiling invariant.
     val tma_slot_frontend_bound = Wire(Vec(coreWidth, Bool()))
     val tma_slot_backend_bound  = Wire(Vec(coreWidth, Bool()))
+    val tma_slot_bad_spec = Wire(Vec(coreWidth, Bool()))
 
     for (w <- 0 until coreWidth) {
+
+      // If we're recovering, then it's not frontend or backend bound
       when (tma_in_recovery) {
-        tma_slot_retiring(w)       := false.B
-        tma_slot_bad_spec(w)       := true.B
         tma_slot_frontend_bound(w) := false.B
         tma_slot_backend_bound(w)  := false.B
-      } .elsewhen (!dec_valids(w) && !dec_finished_mask(w)) {
-        tma_slot_retiring(w)       := false.B
-        tma_slot_bad_spec(w)       := false.B
-        tma_slot_frontend_bound(w) := dis_ready
-        tma_slot_backend_bound(w)  := !dis_ready
-      } .elsewhen (dec_valids(w) && dec_stalls(w)) {
-        tma_slot_retiring(w)       := false.B
-        tma_slot_bad_spec(w)       := false.B
+        tma_slot_bad_spec(w) := true.B
+      }
+
+      // When there is no uop in decode slot AND it's not because of a
+      // partial packet the last cycle, then that slot is frontend bound
+      .elsewhen ( !dec_valids(w) && !dec_finished_mask(w) ) {
+        tma_slot_frontend_bound(w) := true.B
+        tma_slot_backend_bound(w) := false.B
+        tma_slot_bad_spec(w) := false.B
+      }
+      // When a slot is blocked by a dec_finished_mask from a previous cycle,
+      // classify based on why the row didn't complete:
+      //   - dec_unfinished_frontend_fault = true  -> frontend couldn't fill the row
+      //   - dec_unfinished_frontend_fault = false -> backend backpressure stalled decode
+      .elsewhen ( dec_finished_mask(w) && dec_unfinished_frontend_fault ) {
+        tma_slot_frontend_bound(w) := true.B
+        tma_slot_backend_bound(w) := false.B
+        tma_slot_bad_spec(w) := false.B
+      }
+      .elsewhen ( dec_finished_mask(w) && !dec_unfinished_frontend_fault ) {
         tma_slot_frontend_bound(w) := false.B
-        tma_slot_backend_bound(w)  := true.B
-      } .otherwise {
-        tma_slot_retiring(w)       := true.B
-        tma_slot_bad_spec(w)       := false.B
+        tma_slot_backend_bound(w) := true.B
+        tma_slot_bad_spec(w) := false.B
+      }
+      // When there is a uop in decode, but it cannot move on because of
+      // a stall in decode, then that slot is backend bound
+      .elsewhen ( dec_valids(w) && dec_stalls(w) ) {
         tma_slot_frontend_bound(w) := false.B
-        tma_slot_backend_bound(w)  := false.B
+        tma_slot_backend_bound(w) := true.B
+        tma_slot_bad_spec(w) := false.B
+      }
+      .otherwise {
+        tma_slot_frontend_bound(w) := false.B
+        tma_slot_backend_bound(w) := false.B
+        tma_slot_bad_spec(w) := false.B
       }
     }
 
+
+
     // TMA L1 counters
+    // Retiring is counted at commit (arch_valids), not decode, to match instret.
+    // Bad speculation is derived at read time as the aggregate remainder:
+    //   bad_spec = coreWidth * cycles - retiring - frontend_bound - backend_bound
+    // This avoids per-cycle unsigned underflow from the commit/decode temporal mismatch,
+    // and correctly absorbs wrong-path slots that were classified as frontend/backend at decode.
     val tma_ctr_retiring       = RegInit(0.U(xLen.W))
-    val tma_ctr_bad_spec       = RegInit(0.U(xLen.W))
     val tma_ctr_frontend_bound = RegInit(0.U(xLen.W))
     val tma_ctr_backend_bound  = RegInit(0.U(xLen.W))
+    val tma_ctr_bad_spec       = RegInit(0.U(xLen.W))
 
-    tma_ctr_retiring       := tma_ctr_retiring       + PopCount(tma_slot_retiring.asUInt)
-    tma_ctr_bad_spec       := tma_ctr_bad_spec       + PopCount(tma_slot_bad_spec.asUInt)
+    tma_ctr_retiring       := tma_ctr_retiring       + PopCount(rob.io.commit.arch_valids.asUInt)
     tma_ctr_frontend_bound := tma_ctr_frontend_bound + PopCount(tma_slot_frontend_bound.asUInt)
     tma_ctr_backend_bound  := tma_ctr_backend_bound  + PopCount(tma_slot_backend_bound.asUInt)
+    tma_ctr_bad_spec       := tma_ctr_bad_spec       + PopCount(tma_slot_bad_spec.asUInt) + rob.io.tma_killed_by_branch_count + rob.io.tma_killed_by_rollback_count + rename_stage.io.tma_kill_machine_clear + rename_stage.io.tma_kill_branch_mispredict
 
     dontTouch(tma_ctr_retiring)
-    dontTouch(tma_ctr_bad_spec)
     dontTouch(tma_ctr_frontend_bound)
     dontTouch(tma_ctr_backend_bound)
+    dontTouch(tma_ctr_bad_spec)
 
     // TMA Level 2 counters
     val tma_ctr_fetch_latency   = RegInit(0.U(xLen.W))
@@ -764,13 +801,16 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     val tma_ctr_branch_mispredict = RegInit(0.U(xLen.W))
     val tma_ctr_machine_clears   = RegInit(0.U(xLen.W))
 
-    when (tma_in_recovery) {
-      when (tma_is_branch_mispredict_recovery) {
-        tma_ctr_branch_mispredict := tma_ctr_branch_mispredict + coreWidth.U
-      } .otherwise {
-        tma_ctr_machine_clears := tma_ctr_machine_clears + coreWidth.U
-      }
-    }
+    tma_ctr_branch_mispredict := tma_ctr_branch_mispredict + rob.io.tma_killed_by_branch_count + rename_stage.io.tma_kill_branch_mispredict + Mux(tma_is_branch_mispredict_recovery, coreWidth.U, 0.U)
+    tma_ctr_machine_clears := tma_ctr_machine_clears + rob.io.tma_killed_by_rollback_count + rename_stage.io.tma_kill_machine_clear + Mux(tma_is_machine_clear, coreWidth.U, 0.U)
+
+    // when (tma_in_recovery) {
+    //   when (tma_is_branch_mispredict_recovery) {
+    //     tma_ctr_branch_mispredict := tma_ctr_branch_mispredict + coreWidth.U
+    //   } .elsewhen (tma_is_machine_clear) {
+    //     tma_ctr_machine_clears := tma_ctr_machine_clears + coreWidth.U
+    //   }
+    // }
 
     dontTouch(tma_ctr_branch_mispredict)
     dontTouch(tma_ctr_machine_clears)
@@ -899,7 +939,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
       debug_tsc_reg,                // 0: cycles
       debug_irt_reg,                // 1: instret
       tma_ctr_retiring,             // 2: tma_retiring
-      tma_ctr_bad_spec,             // 3: tma_bad_speculation
+      tma_ctr_bad_spec,             // 3: tma_bad_speculation (derived)
       tma_ctr_frontend_bound,       // 4: tma_frontend_bound
       tma_ctr_backend_bound,        // 5: tma_backend_bound
       tma_ctr_fetch_latency,        // 6: tma_fetch_latency
