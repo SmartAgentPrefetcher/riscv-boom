@@ -156,6 +156,11 @@ class BoomTile private(
     connectTLSlave(dev.node, xBytes)
     Some(dev)
   } else None
+
+  // BundleBridge sink for L2 performance counters (wired from subsystem via diplomacy)
+  val l2PerfCounterSinkNode: Option[BundleBridgeSink[Vec[UInt]]] = if (boomParams.core.enableTMACounters) {
+    Some(BundleBridgeSink[Vec[UInt]](Some(() => Vec(BoomPerfCounterConsts.L2_NUM_COUNTERS, UInt(64.W)))))
+  } else None
 }
 
 /**
@@ -254,10 +259,19 @@ class BoomTileModuleImp(outer: BoomTile) extends BaseTileModuleImp(outer){
   lsu.io.hellacache <> hellaCacheArb.io.mem
   outer.dcache.module.io.lsu <> lsu.io.dmem
 
+  // L2 performance counters received via BundleBridge diplomacy from subsystem
+  val l2PerfCounters = outer.l2PerfCounterSinkNode.map(_.bundle)
+
   // TMA Performance Counter MMIO wiring
   outer.perfCounterDevice.foreach { dev =>
     core.io.tma_counters.foreach { ctrs =>
       dev.module.io.counters := ctrs
+      // Override L2 counter slots (40-56) with actual L2 counter values
+      l2PerfCounters.foreach { l2ctrs =>
+        for (i <- 0 until BoomPerfCounterConsts.L2_NUM_COUNTERS) {
+          dev.module.io.counters(BoomPerfCounterConsts.CORE_NUM_COUNTERS + i) := l2ctrs(i)
+        }
+      }
     }
   }
 
@@ -270,6 +284,12 @@ class BoomTileModuleImp(outer: BoomTile) extends BaseTileModuleImp(outer){
       dump.io.clock := clock
       dump.io.reset := reset.asBool
       dump.io.counters := ctrs
+      // Override L2 counter slots with actual values
+      l2PerfCounters.foreach { l2ctrs =>
+        for (i <- 0 until BoomPerfCounterConsts.L2_NUM_COUNTERS) {
+          dump.io.counters(BoomPerfCounterConsts.CORE_NUM_COUNTERS + i) := l2ctrs(i)
+        }
+      }
     }
   }
 

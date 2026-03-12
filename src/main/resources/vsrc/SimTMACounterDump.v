@@ -2,7 +2,7 @@ import "DPI-C" function void tma_counter_store(input int tile_id, input int idx,
 import "DPI-C" function void tma_counter_dump_final(input int tile_id);
 
 module SimTMACounterDump #(
-    parameter NUM_COUNTERS = 40,
+    parameter NUM_COUNTERS = 57,
     parameter TILE_ID = 0
 ) (
     input        clock,
@@ -46,11 +46,29 @@ module SimTMACounterDump #(
     input [63:0] counters_36,
     input [63:0] counters_37,
     input [63:0] counters_38,
-    input [63:0] counters_39
+    input [63:0] counters_39,
+    // L2 cache counters (40-56)
+    input [63:0] counters_40,
+    input [63:0] counters_41,
+    input [63:0] counters_42,
+    input [63:0] counters_43,
+    input [63:0] counters_44,
+    input [63:0] counters_45,
+    input [63:0] counters_46,
+    input [63:0] counters_47,
+    input [63:0] counters_48,
+    input [63:0] counters_49,
+    input [63:0] counters_50,
+    input [63:0] counters_51,
+    input [63:0] counters_52,
+    input [63:0] counters_53,
+    input [63:0] counters_54,
+    input [63:0] counters_55,
+    input [63:0] counters_56
 );
 
     reg enabled;
-    wire [63:0] ctr_array [0:39];
+    wire [63:0] ctr_array [0:56];
 
     assign ctr_array[0]  = counters_0;
     assign ctr_array[1]  = counters_1;
@@ -92,6 +110,24 @@ module SimTMACounterDump #(
     assign ctr_array[37] = counters_37;
     assign ctr_array[38] = counters_38;
     assign ctr_array[39] = counters_39;
+    // L2 cache counters
+    assign ctr_array[40] = counters_40;
+    assign ctr_array[41] = counters_41;
+    assign ctr_array[42] = counters_42;
+    assign ctr_array[43] = counters_43;
+    assign ctr_array[44] = counters_44;
+    assign ctr_array[45] = counters_45;
+    assign ctr_array[46] = counters_46;
+    assign ctr_array[47] = counters_47;
+    assign ctr_array[48] = counters_48;
+    assign ctr_array[49] = counters_49;
+    assign ctr_array[50] = counters_50;
+    assign ctr_array[51] = counters_51;
+    assign ctr_array[52] = counters_52;
+    assign ctr_array[53] = counters_53;
+    assign ctr_array[54] = counters_54;
+    assign ctr_array[55] = counters_55;
+    assign ctr_array[56] = counters_56;
 
     initial begin
         enabled = $test$plusargs("dump-tma-counters");

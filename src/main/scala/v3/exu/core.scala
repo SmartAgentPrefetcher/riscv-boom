@@ -936,7 +936,8 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
       tma_ctr_jalr_mispredict,      // 37: jalr_mispredict
       tma_ctr_br_mispred_bpd,       // 38: br_mispredict_bpd
       tma_ctr_br_mispred_btb        // 39: br_mispredict_btb
-    ))
+    ) ++ Seq.fill(BoomPerfCounterConsts.L2_NUM_COUNTERS)(0.U(xLen.W)) // 40-56: L2 counter placeholders (overridden by tile)
+    )
   } // end enableTMACounters
 
   //-------------------------------------------------------------

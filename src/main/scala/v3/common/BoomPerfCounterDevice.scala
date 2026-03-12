@@ -51,9 +51,29 @@ import midas.targetutils.SynthesizePrintf
 //   0x130: jalr_mispredict
 //   0x138: br_mispredict_bpd
 //   0x140: br_mispredict_btb
+// --- L2 Cache Counters (from InclusiveCache) ---
+//   0x148: l2_pf_hint_req_accepted
+//   0x150: l2_pf_hint_req_blocked_cycles
+//   0x158: l2_pf_hint_alloc_dir_miss
+//   0x160: l2_pf_hint_alloc_dir_hit
+//   0x168: l2_demand_alloc_dir_miss
+//   0x170: l2_demand_alloc_dir_hit_on_prefetched
+//   0x178: l2_demand_alloc_dir_hit_on_pf_brought
+//   0x180: l2_demand_queued_behind_prefetch
+//   0x188: l2_demand_alloc_dir_hit_regular
+//   0x190: l2_secondary_misses
+//   0x198: l2_evictions_dirty
+//   0x1A0: l2_evictions_clean
+//   0x1A8: l2_evictions_prefetched
+//   0x1B0: l2_mshr_occupancy_sum
+//   0x1B8: l2_mshr_full_cycles
+//   0x1C0: l2_set_conflict_stall_cycles
+//   0x1C8: l2_bank_conflict_cycles
 
 object BoomPerfCounterConsts {
-  val NUM_COUNTERS = 40
+  val CORE_NUM_COUNTERS = 40
+  val L2_NUM_COUNTERS = 17
+  val NUM_COUNTERS = CORE_NUM_COUNTERS + L2_NUM_COUNTERS // 57
 }
 
 case class BoomPerfCounterParams(
@@ -114,7 +134,13 @@ class BoomPerfCounterDevice(params: BoomPerfCounterParams, beatBytes: Int)(impli
         "branch_mask_full", "rename_stall", "flush_cycles", "rollback_cycles",
         "icache_miss", "dcache_miss", "dcache_release",
         "itlb_miss", "dtlb_miss", "l2tlb_miss",
-        "br_mispredict", "br_resolve", "jalr_mispredict", "br_mispred_bpd", "br_mispred_btb")
+        "br_mispredict", "br_resolve", "jalr_mispredict", "br_mispred_bpd", "br_mispred_btb",
+        // L2 cache counters
+        "l2_pf_hint_req_accepted", "l2_pf_hint_req_blocked", "l2_pf_alloc_dir_miss", "l2_pf_alloc_dir_hit",
+        "l2_demand_alloc_dir_miss", "l2_demand_hit_prefetched", "l2_demand_hit_pf_brought",
+        "l2_demand_queued_behind_pf", "l2_demand_hit_regular",
+        "l2_secondary_misses", "l2_evict_dirty", "l2_evict_clean", "l2_evict_prefetched",
+        "l2_mshr_occ_sum", "l2_mshr_full", "l2_set_conflict_stall", "l2_bank_conflict")
       SynthesizePrintf(printf("===== TMA PERFORMANCE COUNTERS =====\n"))
       for (i <- 0 until BoomPerfCounterConsts.NUM_COUNTERS) {
         SynthesizePrintf(printf(s"  %24s = %%d\n".format(names(i)), io.counters(i)))
