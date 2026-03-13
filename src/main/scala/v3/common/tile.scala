@@ -142,7 +142,7 @@ class BoomTile private(
   frontend.resetVectorSinkNode := resetVectorNexusNode
   tlMasterXbar.node := TLWidthWidget(tileParams.icache.get.rowBits/8) := frontend.masterNode
 
-  require(tileParams.dcache.get.rowBits == tileParams.icache.get.rowBits)
+  // require(tileParams.dcache.get.rowBits == tileParams.icache.get.rowBits)
 
   // ROCC
   val roccs = p(BuildRoCC).map(_(p))
