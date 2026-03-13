@@ -104,6 +104,7 @@ class LSUDMemIO(implicit p: Parameters, edge: TLEdgeOut) extends BoomBundle()(p)
     val release = Bool()
   })
 
+  val refill_in_flight = Input(Bool())
 }
 
 class LSUCoreIO(implicit p: Parameters) extends BoomBundle()(p)
@@ -153,6 +154,8 @@ class LSUCoreIO(implicit p: Parameters) extends BoomBundle()(p)
     val release = Bool()
     val tlbMiss = Bool()
   })
+
+  val refill_in_flight = Output(Bool())
 }
 
 class LSUIO(implicit p: Parameters, edge: TLEdgeOut) extends BoomBundle()(p)
@@ -251,6 +254,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   io.core.perf.tlbMiss := io.ptw.req.fire
   io.core.perf.acquire := io.dmem.perf.acquire
   io.core.perf.release := io.dmem.perf.release
+  io.core.refill_in_flight := io.dmem.refill_in_flight
 
 
 
