@@ -58,6 +58,7 @@ class RobIo(
   val rob_tail_idx = Output(UInt(robAddrSz.W))
   val rob_pnr_idx  = Output(UInt(robAddrSz.W))
   val rob_head_idx = Output(UInt(robAddrSz.W))
+  val full = Output(Bool())
 
   // Handle Branch Misspeculations
   val brupdate = Input(new BrUpdateInfo())
@@ -824,6 +825,7 @@ class Rob(
   io.rob_pnr_idx  := rob_pnr_idx
   io.empty        := empty
   io.ready        := (rob_state === s_normal) && !full && !r_xcpt_val
+  io.full         := full
 
   //-----------------------------------------------
   //-----------------------------------------------
