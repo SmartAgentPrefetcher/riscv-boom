@@ -69,11 +69,21 @@ import midas.targetutils.SynthesizePrintf
 //   0x1B8: l2_mshr_full_cycles
 //   0x1C0: l2_set_conflict_stall_cycles
 //   0x1C8: l2_bank_conflict_cycles
+// --- Memory ordering counters (57-64) ---
+//   0x1D0: stld_fwd_stall_cycles
+//   0x1D8: stld_fwd_success
+//   0x1E0: stld_fwd_wakeup_retries
+//   0x1E8: stld_fwd_block_load_wakeup_cycles
+//   0x1F0: mem_order_failures
+//   0x1F8: load_ordering_failures
+//   0x200: load_spec_mispredict
+//   0x208: load_nack_retries
 
 object BoomPerfCounterConsts {
   val CORE_NUM_COUNTERS = 40
   val L2_NUM_COUNTERS = 17
-  val NUM_COUNTERS = CORE_NUM_COUNTERS + L2_NUM_COUNTERS // 57
+  val MEM_ORDER_NUM_COUNTERS = 8
+  val NUM_COUNTERS = CORE_NUM_COUNTERS + L2_NUM_COUNTERS + MEM_ORDER_NUM_COUNTERS // 65
 }
 
 case class BoomPerfCounterParams(
@@ -140,7 +150,11 @@ class BoomPerfCounterDevice(params: BoomPerfCounterParams, beatBytes: Int)(impli
         "l2_demand_alloc_dir_miss", "l2_demand_hit_prefetched", "l2_demand_hit_pf_brought",
         "l2_demand_queued_behind_pf", "l2_demand_hit_regular",
         "l2_secondary_misses", "l2_evict_dirty", "l2_evict_clean", "l2_evict_prefetched",
-        "l2_mshr_occ_sum", "l2_mshr_full", "l2_set_conflict_stall", "l2_bank_conflict")
+        "l2_mshr_occ_sum", "l2_mshr_full", "l2_set_conflict_stall", "l2_bank_conflict",
+        // Memory ordering counters
+        "stld_fwd_stall_cycles", "stld_fwd_success", "stld_fwd_wakeup_retries",
+        "stld_fwd_block_load_wakeup_cycles", "mem_order_failures",
+        "load_ordering_failures", "load_spec_mispredict", "load_nack_retries")
       SynthesizePrintf(printf("===== TMA PERFORMANCE COUNTERS =====\n"))
       for (i <- 0 until BoomPerfCounterConsts.NUM_COUNTERS) {
         SynthesizePrintf(printf(s"  %24s = %%d\n".format(names(i)), io.counters(i)))

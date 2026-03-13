@@ -948,6 +948,36 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     dontTouch(tma_ctr_br_mispred_bpd)
     dontTouch(tma_ctr_br_mispred_btb)
 
+    val tma_ctr_stld_fwd_stall_cycles       = RegInit(0.U(xLen.W))
+    val tma_ctr_stld_fwd_success            = RegInit(0.U(xLen.W))
+    val tma_ctr_stld_fwd_wakeup_retries     = RegInit(0.U(xLen.W))
+    val tma_ctr_stld_block_load_wakeup      = RegInit(0.U(xLen.W))
+    val tma_ctr_mem_order_failures          = RegInit(0.U(xLen.W))
+    val tma_ctr_load_ordering_failures      = RegInit(0.U(xLen.W))
+    val tma_ctr_load_spec_mispredict        = RegInit(0.U(xLen.W))
+    val tma_ctr_load_nack_retries           = RegInit(0.U(xLen.W))
+
+    if (boomParams.enableMemOrderCounters) {
+      tma_ctr_stld_fwd_stall_cycles   := tma_ctr_stld_fwd_stall_cycles + io.lsu.perf.stldForwardStall
+      tma_ctr_stld_fwd_success        := tma_ctr_stld_fwd_success + io.lsu.perf.stldForwardSuccess
+      tma_ctr_stld_fwd_wakeup_retries := tma_ctr_stld_fwd_wakeup_retries + io.lsu.perf.stldForwardWakeupRetry
+      tma_ctr_stld_block_load_wakeup  := tma_ctr_stld_block_load_wakeup + io.lsu.perf.stldBlockLoadWakeup
+      tma_ctr_mem_order_failures      := tma_ctr_mem_order_failures +
+        (io.lsu.lxcpt.valid && io.lsu.lxcpt.bits.cause === MINI_EXCEPTION_MEM_ORDERING)
+      tma_ctr_load_ordering_failures  := tma_ctr_load_ordering_failures + io.lsu.perf.loadOrderingFailure
+      tma_ctr_load_spec_mispredict    := tma_ctr_load_spec_mispredict + io.lsu.ld_miss
+      tma_ctr_load_nack_retries       := tma_ctr_load_nack_retries + io.lsu.perf.loadNackRetry
+    }
+
+    dontTouch(tma_ctr_stld_fwd_stall_cycles)
+    dontTouch(tma_ctr_stld_fwd_success)
+    dontTouch(tma_ctr_stld_fwd_wakeup_retries)
+    dontTouch(tma_ctr_stld_block_load_wakeup)
+    dontTouch(tma_ctr_mem_order_failures)
+    dontTouch(tma_ctr_load_ordering_failures)
+    dontTouch(tma_ctr_load_spec_mispredict)
+    dontTouch(tma_ctr_load_nack_retries)
+
     // Populate MMIO counter output vector
     io.tma_counters.get := VecInit(Seq(
       debug_tsc_reg,                // 0: cycles
@@ -990,7 +1020,16 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
       tma_ctr_jalr_mispredict,      // 37: jalr_mispredict
       tma_ctr_br_mispred_bpd,       // 38: br_mispredict_bpd
       tma_ctr_br_mispred_btb        // 39: br_mispredict_btb
-    ) ++ Seq.fill(BoomPerfCounterConsts.L2_NUM_COUNTERS)(0.U(xLen.W)) // 40-56: L2 counter placeholders (overridden by tile)
+    ) ++ Seq.fill(BoomPerfCounterConsts.L2_NUM_COUNTERS)(0.U(xLen.W)) ++ Seq(
+      tma_ctr_stld_fwd_stall_cycles,   // 57: stld_fwd_stall_cycles
+      tma_ctr_stld_fwd_success,        // 58: stld_fwd_success
+      tma_ctr_stld_fwd_wakeup_retries, // 59: stld_fwd_wakeup_retries
+      tma_ctr_stld_block_load_wakeup,  // 60: stld_fwd_block_load_wakeup_cycles
+      tma_ctr_mem_order_failures,      // 61: mem_order_failures
+      tma_ctr_load_ordering_failures,  // 62: load_ordering_failures
+      tma_ctr_load_spec_mispredict,    // 63: load_spec_mispredict
+      tma_ctr_load_nack_retries        // 64: load_nack_retries
+    )
     )
   } // end enableTMACounters
 
