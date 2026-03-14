@@ -57,6 +57,7 @@ case class BoomCoreParams(
   nPMPs: Int = 8,
   enableICacheDelay: Boolean = false,
   enableTMACounters: Boolean = false,
+  enableMemOrderCounters: Boolean = false,
   enableTMASimDump: Boolean = false,
 
   /* branch prediction */
