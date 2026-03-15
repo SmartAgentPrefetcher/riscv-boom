@@ -266,10 +266,10 @@ class BoomTileModuleImp(outer: BoomTile) extends BaseTileModuleImp(outer){
   outer.perfCounterDevice.foreach { dev =>
     core.io.tma_counters.foreach { ctrs =>
       dev.module.io.counters := ctrs
-      // Override L2 counter slots (40-56) with actual L2 counter values
+      // Override L2 counter slots (75-91) with actual L2 counter values
       l2PerfCounters.foreach { l2ctrs =>
         for (i <- 0 until BoomPerfCounterConsts.L2_NUM_COUNTERS) {
-          dev.module.io.counters(BoomPerfCounterConsts.CORE_NUM_COUNTERS + i) := l2ctrs(i)
+          dev.module.io.counters(BoomPerfCounterConsts.CORE_NUM_COUNTERS + BoomPerfCounterConsts.MEM_ORDER_NUM_COUNTERS + BoomPerfCounterConsts.DATA_DEP_NUM_COUNTERS + i) := l2ctrs(i)
         }
       }
     }
@@ -287,7 +287,7 @@ class BoomTileModuleImp(outer: BoomTile) extends BaseTileModuleImp(outer){
       // Override L2 counter slots with actual values
       l2PerfCounters.foreach { l2ctrs =>
         for (i <- 0 until BoomPerfCounterConsts.L2_NUM_COUNTERS) {
-          dump.io.counters(BoomPerfCounterConsts.CORE_NUM_COUNTERS + i) := l2ctrs(i)
+          dump.io.counters(BoomPerfCounterConsts.CORE_NUM_COUNTERS + BoomPerfCounterConsts.MEM_ORDER_NUM_COUNTERS + BoomPerfCounterConsts.DATA_DEP_NUM_COUNTERS + i) := l2ctrs(i)
         }
       }
     }
