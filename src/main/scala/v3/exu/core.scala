@@ -978,6 +978,51 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     dontTouch(tma_ctr_load_spec_mispredict)
     dontTouch(tma_ctr_load_nack_retries)
 
+    // Data dependency counters (65-71)
+    val tma_ctr_dep_stall_cycles        = RegInit(0.U(xLen.W))
+    val tma_ctr_operand_wait_slot_cycles = RegInit(0.U(xLen.W))
+    val tma_ctr_iq_dispatched_ready     = RegInit(0.U(xLen.W))
+    val tma_ctr_iq_dispatched_not_ready = RegInit(0.U(xLen.W))
+    val tma_ctr_issued_with_poison      = RegInit(0.U(xLen.W))
+    val tma_ctr_ldspec_squash_grants    = RegInit(0.U(xLen.W))
+    val tma_ctr_spec_ld_wakeup_events   = RegInit(0.U(xLen.W))
+
+    if (boomParams.enableDataDepCounters) {
+      // dep_stall_cycles: core-level boolean — any INT/MEM IQ has valid entries but none requesting
+      val any_dep_stall = issue_units.map(_.io.perf_dep.dep_stall).reduce(_||_)
+      tma_ctr_dep_stall_cycles := tma_ctr_dep_stall_cycles + any_dep_stall
+
+      // operand_wait_slot_cycles: sum of (valid && !request) across all IQ slots
+      val total_not_ready = issue_units.map(_.io.perf_dep.not_ready_slots).reduce(_ +& _)
+      tma_ctr_operand_wait_slot_cycles := tma_ctr_operand_wait_slot_cycles + total_not_ready
+
+      // iq_dispatched_ready/not_ready: sum across issue units
+      val total_disp_ready = issue_units.map(_.io.perf_dep.iq_dispatched_ready).reduce(_ +& _)
+      val total_disp_not_ready = issue_units.map(_.io.perf_dep.iq_dispatched_not_ready).reduce(_ +& _)
+      tma_ctr_iq_dispatched_ready := tma_ctr_iq_dispatched_ready + total_disp_ready
+      tma_ctr_iq_dispatched_not_ready := tma_ctr_iq_dispatched_not_ready + total_disp_not_ready
+
+      // issued_with_poison: sum across issue units
+      val total_poison = issue_units.map(_.io.perf_dep.issued_with_poison).reduce(_ +& _)
+      tma_ctr_issued_with_poison := tma_ctr_issued_with_poison + total_poison
+
+      // ldspec_squash_grants: sum across issue units
+      val total_squash = issue_units.map(_.io.perf_dep.squash_grants).reduce(_ +& _)
+      tma_ctr_ldspec_squash_grants := tma_ctr_ldspec_squash_grants + total_squash
+
+      // spec_ld_wakeup_events: count from LSU spec_ld_wakeup ports
+      tma_ctr_spec_ld_wakeup_events := tma_ctr_spec_ld_wakeup_events +
+        PopCount(io.lsu.spec_ld_wakeup.map(_.valid))
+    }
+
+    dontTouch(tma_ctr_dep_stall_cycles)
+    dontTouch(tma_ctr_operand_wait_slot_cycles)
+    dontTouch(tma_ctr_iq_dispatched_ready)
+    dontTouch(tma_ctr_iq_dispatched_not_ready)
+    dontTouch(tma_ctr_issued_with_poison)
+    dontTouch(tma_ctr_ldspec_squash_grants)
+    dontTouch(tma_ctr_spec_ld_wakeup_events)
+
     // Populate MMIO counter output vector
     io.tma_counters.get := VecInit(Seq(
       debug_tsc_reg,                // 0: cycles
@@ -1029,6 +1074,14 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
       tma_ctr_load_ordering_failures,  // 62: load_ordering_failures
       tma_ctr_load_spec_mispredict,    // 63: load_spec_mispredict
       tma_ctr_load_nack_retries        // 64: load_nack_retries
+    ) ++ Seq(
+      tma_ctr_dep_stall_cycles,         // 65: dep_stall_cycles
+      tma_ctr_operand_wait_slot_cycles, // 66: operand_wait_slot_cycles
+      tma_ctr_iq_dispatched_ready,      // 67: iq_dispatched_ready
+      tma_ctr_iq_dispatched_not_ready,  // 68: iq_dispatched_not_ready
+      tma_ctr_issued_with_poison,       // 69: issued_with_poison
+      tma_ctr_ldspec_squash_grants,     // 70: ldspec_squash_grants
+      tma_ctr_spec_ld_wakeup_events    // 71: spec_ld_wakeup_events
     )
     )
   } // end enableTMACounters
