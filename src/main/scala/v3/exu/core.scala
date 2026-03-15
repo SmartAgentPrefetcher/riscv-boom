@@ -1023,6 +1023,53 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     dontTouch(tma_ctr_ldspec_squash_grants)
     dontTouch(tma_ctr_spec_ld_wakeup_events)
 
+    // OOO engine counters (72-78)
+    // Physical register exhaustion: subset decomposition of rename_stall.
+    // int_preg_stall + fp_preg_stall <= rename_stall (predicate stalls not decomposed).
+    val tma_ctr_int_preg_stall    = RegInit(0.U(xLen.W))
+    val tma_ctr_fp_preg_stall     = RegInit(0.U(xLen.W))
+    // Retirement width distribution: cycles with exactly N instructions retired.
+    // retire_width_0 + ... + retire_width_4 == cycles (for coreWidth <= 4).
+    val tma_ctr_retire_width_0    = RegInit(0.U(xLen.W))
+    val tma_ctr_retire_width_1    = RegInit(0.U(xLen.W))
+    val tma_ctr_retire_width_2    = RegInit(0.U(xLen.W))
+    val tma_ctr_retire_width_3    = RegInit(0.U(xLen.W))
+    val tma_ctr_retire_width_4    = RegInit(0.U(xLen.W))
+
+    if (boomParams.enableOOOEngineCounters) {
+      // INT freelist exhaustion: any slot's INT rename can't allocate
+      val int_ren_stall = rename_stage.io.ren_stalls.reduce(_||_)
+      tma_ctr_int_preg_stall := tma_ctr_int_preg_stall + int_ren_stall
+
+      // FP freelist exhaustion: any slot's FP rename can't allocate
+      if (usingFPU) {
+        val fp_ren_stall = fp_rename_stage.io.ren_stalls.reduce(_||_)
+        tma_ctr_fp_preg_stall := tma_ctr_fp_preg_stall + fp_ren_stall
+      }
+
+      // Retirement width distribution
+      val retire_count = PopCount(rob.io.commit.arch_valids.asUInt)
+      tma_ctr_retire_width_0 := tma_ctr_retire_width_0 + (retire_count === 0.U)
+      tma_ctr_retire_width_1 := tma_ctr_retire_width_1 + (retire_count === 1.U)
+      if (coreWidth >= 2) {
+        tma_ctr_retire_width_2 := tma_ctr_retire_width_2 + (retire_count === 2.U)
+      }
+      if (coreWidth >= 3) {
+        tma_ctr_retire_width_3 := tma_ctr_retire_width_3 + (retire_count === 3.U)
+      }
+      if (coreWidth >= 4) {
+        tma_ctr_retire_width_4 := tma_ctr_retire_width_4 + (retire_count === 4.U)
+      }
+    }
+
+    dontTouch(tma_ctr_int_preg_stall)
+    dontTouch(tma_ctr_fp_preg_stall)
+    dontTouch(tma_ctr_retire_width_0)
+    dontTouch(tma_ctr_retire_width_1)
+    dontTouch(tma_ctr_retire_width_2)
+    dontTouch(tma_ctr_retire_width_3)
+    dontTouch(tma_ctr_retire_width_4)
+
     // Populate MMIO counter output vector
     io.tma_counters.get := VecInit(Seq(
       debug_tsc_reg,                // 0: cycles
@@ -1082,6 +1129,14 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
       tma_ctr_issued_with_poison,       // 69: issued_with_poison
       tma_ctr_ldspec_squash_grants,     // 70: ldspec_squash_grants
       tma_ctr_spec_ld_wakeup_events    // 71: spec_ld_wakeup_events
+    ) ++ Seq(
+      tma_ctr_int_preg_stall,           // 72: int_preg_stall_cycles
+      tma_ctr_fp_preg_stall,            // 73: fp_preg_stall_cycles
+      tma_ctr_retire_width_0,           // 74: retire_width_0_cycles
+      tma_ctr_retire_width_1,           // 75: retire_width_1_cycles
+      tma_ctr_retire_width_2,           // 76: retire_width_2_cycles
+      tma_ctr_retire_width_3,           // 77: retire_width_3_cycles
+      tma_ctr_retire_width_4            // 78: retire_width_4_cycles
     )
     )
   } // end enableTMACounters

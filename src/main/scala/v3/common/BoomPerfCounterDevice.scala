@@ -86,13 +86,22 @@ import midas.targetutils.SynthesizePrintf
 //   0x230: issued_with_poison
 //   0x238: ldspec_squash_grants
 //   0x240: spec_ld_wakeup_events
+// --- OOO engine counters (72-78) ---
+//   0x248: int_preg_stall_cycles
+//   0x250: fp_preg_stall_cycles
+//   0x258: retire_width_0_cycles
+//   0x260: retire_width_1_cycles
+//   0x268: retire_width_2_cycles
+//   0x270: retire_width_3_cycles
+//   0x278: retire_width_4_cycles
 
 object BoomPerfCounterConsts {
   val CORE_NUM_COUNTERS = 40
   val L2_NUM_COUNTERS = 17
   val MEM_ORDER_NUM_COUNTERS = 8
   val DATA_DEP_NUM_COUNTERS = 7
-  val NUM_COUNTERS = CORE_NUM_COUNTERS + L2_NUM_COUNTERS + MEM_ORDER_NUM_COUNTERS + DATA_DEP_NUM_COUNTERS // 72
+  val OOO_ENGINE_NUM_COUNTERS = 7
+  val NUM_COUNTERS = CORE_NUM_COUNTERS + L2_NUM_COUNTERS + MEM_ORDER_NUM_COUNTERS + DATA_DEP_NUM_COUNTERS + OOO_ENGINE_NUM_COUNTERS // 79
 }
 
 case class BoomPerfCounterParams(
@@ -167,7 +176,11 @@ class BoomPerfCounterDevice(params: BoomPerfCounterParams, beatBytes: Int)(impli
         // Data dependency counters
         "dep_stall_cycles", "operand_wait_slot_cycles",
         "iq_dispatched_ready", "iq_dispatched_not_ready",
-        "issued_with_poison", "ldspec_squash_grants", "spec_ld_wakeup_events")
+        "issued_with_poison", "ldspec_squash_grants", "spec_ld_wakeup_events",
+        // OOO engine counters
+        "int_preg_stall_cycles", "fp_preg_stall_cycles",
+        "retire_width_0_cycles", "retire_width_1_cycles", "retire_width_2_cycles",
+        "retire_width_3_cycles", "retire_width_4_cycles")
       SynthesizePrintf(printf("===== TMA PERFORMANCE COUNTERS =====\n"))
       for (i <- 0 until BoomPerfCounterConsts.NUM_COUNTERS) {
         SynthesizePrintf(printf(s"  %24s = %%d\n".format(names(i)), io.counters(i)))
