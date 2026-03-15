@@ -2,7 +2,7 @@
 #include <cstdint>
 
 #define MAX_TILES 8
-#define NUM_COUNTERS 65
+#define NUM_COUNTERS 72
 
 static uint64_t last_counters[MAX_TILES][NUM_COUNTERS];
 
@@ -30,7 +30,11 @@ static const char* counter_names[NUM_COUNTERS] = {
     "l2_set_conflict_stall", "l2_bank_conflict",
     "stld_fwd_stall_cycles", "stld_fwd_success", "stld_fwd_wakeup_retries",
     "stld_fwd_block_load_wakeup_cycles", "mem_order_failures",
-    "load_ordering_failures", "load_spec_mispredict", "load_nack_retries"
+    "load_ordering_failures", "load_spec_mispredict", "load_nack_retries",
+    // Data dependency counters (65-71)
+    "dep_stall_cycles", "operand_wait_slot_cycles",
+    "iq_dispatched_ready", "iq_dispatched_not_ready",
+    "issued_with_poison", "ldspec_squash_grants", "spec_ld_wakeup_events"
 };
 
 extern "C" void tma_counter_store(int tile_id, int idx, uint64_t value) {

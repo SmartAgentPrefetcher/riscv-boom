@@ -2,7 +2,7 @@ import "DPI-C" function void tma_counter_store(input int tile_id, input int idx,
 import "DPI-C" function void tma_counter_dump_final(input int tile_id);
 
 module SimTMACounterDump #(
-    parameter NUM_COUNTERS = 65,
+    parameter NUM_COUNTERS = 72,
     parameter TILE_ID = 0
 ) (
     input        clock,
@@ -73,11 +73,19 @@ module SimTMACounterDump #(
     input [63:0] counters_61,
     input [63:0] counters_62,
     input [63:0] counters_63,
-    input [63:0] counters_64
+    input [63:0] counters_64,
+    // Data dependency counters (65-71)
+    input [63:0] counters_65,
+    input [63:0] counters_66,
+    input [63:0] counters_67,
+    input [63:0] counters_68,
+    input [63:0] counters_69,
+    input [63:0] counters_70,
+    input [63:0] counters_71
 );
 
     reg enabled;
-    wire [63:0] ctr_array [0:64];
+    wire [63:0] ctr_array [0:71];
 
     assign ctr_array[0]  = counters_0;
     assign ctr_array[1]  = counters_1;
@@ -145,6 +153,14 @@ module SimTMACounterDump #(
     assign ctr_array[62] = counters_62;
     assign ctr_array[63] = counters_63;
     assign ctr_array[64] = counters_64;
+    // Data dependency counters
+    assign ctr_array[65] = counters_65;
+    assign ctr_array[66] = counters_66;
+    assign ctr_array[67] = counters_67;
+    assign ctr_array[68] = counters_68;
+    assign ctr_array[69] = counters_69;
+    assign ctr_array[70] = counters_70;
+    assign ctr_array[71] = counters_71;
 
     initial begin
         enabled = $test$plusargs("dump-tma-counters");

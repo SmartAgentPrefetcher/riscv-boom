@@ -78,12 +78,21 @@ import midas.targetutils.SynthesizePrintf
 //   0x1F8: load_ordering_failures
 //   0x200: load_spec_mispredict
 //   0x208: load_nack_retries
+// --- Data dependency counters (65-71) ---
+//   0x210: dep_stall_cycles
+//   0x218: operand_wait_slot_cycles
+//   0x220: iq_dispatched_ready
+//   0x228: iq_dispatched_not_ready
+//   0x230: issued_with_poison
+//   0x238: ldspec_squash_grants
+//   0x240: spec_ld_wakeup_events
 
 object BoomPerfCounterConsts {
   val CORE_NUM_COUNTERS = 40
   val L2_NUM_COUNTERS = 17
   val MEM_ORDER_NUM_COUNTERS = 8
-  val NUM_COUNTERS = CORE_NUM_COUNTERS + L2_NUM_COUNTERS + MEM_ORDER_NUM_COUNTERS // 65
+  val DATA_DEP_NUM_COUNTERS = 7
+  val NUM_COUNTERS = CORE_NUM_COUNTERS + L2_NUM_COUNTERS + MEM_ORDER_NUM_COUNTERS + DATA_DEP_NUM_COUNTERS // 72
 }
 
 case class BoomPerfCounterParams(
@@ -154,7 +163,11 @@ class BoomPerfCounterDevice(params: BoomPerfCounterParams, beatBytes: Int)(impli
         // Memory ordering counters
         "stld_fwd_stall_cycles", "stld_fwd_success", "stld_fwd_wakeup_retries",
         "stld_fwd_block_load_wakeup_cycles", "mem_order_failures",
-        "load_ordering_failures", "load_spec_mispredict", "load_nack_retries")
+        "load_ordering_failures", "load_spec_mispredict", "load_nack_retries",
+        // Data dependency counters
+        "dep_stall_cycles", "operand_wait_slot_cycles",
+        "iq_dispatched_ready", "iq_dispatched_not_ready",
+        "issued_with_poison", "ldspec_squash_grants", "spec_ld_wakeup_events")
       SynthesizePrintf(printf("===== TMA PERFORMANCE COUNTERS =====\n"))
       for (i <- 0 until BoomPerfCounterConsts.NUM_COUNTERS) {
         SynthesizePrintf(printf(s"  %24s = %%d\n".format(names(i)), io.counters(i)))

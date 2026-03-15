@@ -52,6 +52,15 @@ class WithBoomTMACounters extends Config((site, here, up) => {
   }
 })
 
+class WithBoomDataDepCounters extends Config((site, here, up) => {
+  case TilesLocated(InSubsystem) => up(TilesLocated(InSubsystem), site) map {
+    case tp: BoomTileAttachParams => tp.copy(tileParams = tp.tileParams.copy(core = tp.tileParams.core.copy(
+      enableDataDepCounters = true
+    )))
+    case other => other
+  }
+})
+
 class WithBoomMemOrderCounters extends Config((site, here, up) => {
   case TilesLocated(InSubsystem) => up(TilesLocated(InSubsystem), site) map {
     case tp: BoomTileAttachParams => tp.copy(tileParams = tp.tileParams.copy(core = tp.tileParams.core.copy(
