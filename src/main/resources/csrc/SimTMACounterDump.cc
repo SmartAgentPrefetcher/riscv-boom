@@ -2,7 +2,7 @@
 #include <cstdint>
 
 #define MAX_TILES 8
-#define NUM_COUNTERS 72
+#define NUM_COUNTERS 92
 
 static uint64_t last_counters[MAX_TILES][NUM_COUNTERS];
 
@@ -18,7 +18,23 @@ static const char* counter_names[NUM_COUNTERS] = {
     "icache_miss", "dcache_miss", "dcache_release",
     "itlb_miss", "dtlb_miss", "l2tlb_miss",
     "br_mispredict", "br_resolve", "jalr_mispredict", "br_mispred_bpd", "br_mispred_btb",
-    // L2 cache counters (40-56)
+    // New core counters (40-59)
+    "dispatch_slots_valid",
+    "issued_int_total", "issued_mem_total", "issued_mul_total", "issued_div_total",
+    "flush_xcpt", "flush_eret", "flush_refetch", "flush_next",
+    "dis_stall",
+    "br_cond_mispredict", "br_indirect_mispredict", "br_ret_mispredict", "br_no_prediction",
+    "fetch_bubble_raw", "fetch_slots_delivered", "decode_backend_stall",
+    "int_iq_empty", "mem_iq_empty", "sfb_opt_events",
+    // Memory ordering counters (60-67)
+    "stld_fwd_stall_cycles", "stld_fwd_success", "stld_fwd_wakeup_retries",
+    "stld_fwd_block_load_wakeup_cycles", "mem_order_failures",
+    "load_ordering_failures", "load_spec_mispredict", "load_nack_retries",
+    // Data dependency counters (68-74)
+    "dep_stall_cycles", "operand_wait_slot_cycles",
+    "iq_dispatched_ready", "iq_dispatched_not_ready",
+    "issued_with_poison", "ldspec_squash_grants", "spec_ld_wakeup_events",
+    // L2 cache counters (75-91)
     "l2_pf_hint_req_accepted", "l2_pf_hint_req_blocked",
     "l2_pf_alloc_dir_miss", "l2_pf_alloc_dir_hit",
     "l2_demand_alloc_dir_miss", "l2_demand_hit_prefetched",
@@ -27,14 +43,7 @@ static const char* counter_names[NUM_COUNTERS] = {
     "l2_secondary_misses", "l2_evict_dirty", "l2_evict_clean",
     "l2_evict_prefetched",
     "l2_mshr_occ_sum", "l2_mshr_full",
-    "l2_set_conflict_stall", "l2_bank_conflict",
-    "stld_fwd_stall_cycles", "stld_fwd_success", "stld_fwd_wakeup_retries",
-    "stld_fwd_block_load_wakeup_cycles", "mem_order_failures",
-    "load_ordering_failures", "load_spec_mispredict", "load_nack_retries",
-    // Data dependency counters (65-71)
-    "dep_stall_cycles", "operand_wait_slot_cycles",
-    "iq_dispatched_ready", "iq_dispatched_not_ready",
-    "issued_with_poison", "ldspec_squash_grants", "spec_ld_wakeup_events"
+    "l2_set_conflict_stall", "l2_bank_conflict"
 };
 
 extern "C" void tma_counter_store(int tile_id, int idx, uint64_t value) {
