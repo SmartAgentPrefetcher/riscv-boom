@@ -59,6 +59,7 @@ case class BoomCoreParams(
   enableTMACounters: Boolean = false,
   enableMemOrderCounters: Boolean = false,
   enableDataDepCounters: Boolean = false,
+  enableOOOEngineCounters: Boolean = false,
   enableTMASimDump: Boolean = false,
 
   /* branch prediction */

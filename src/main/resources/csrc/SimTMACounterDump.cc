@@ -2,7 +2,7 @@
 #include <cstdint>
 
 #define MAX_TILES 8
-#define NUM_COUNTERS 92
+#define NUM_COUNTERS 99
 
 static uint64_t last_counters[MAX_TILES][NUM_COUNTERS];
 
@@ -43,7 +43,11 @@ static const char* counter_names[NUM_COUNTERS] = {
     "l2_secondary_misses", "l2_evict_dirty", "l2_evict_clean",
     "l2_evict_prefetched",
     "l2_mshr_occ_sum", "l2_mshr_full",
-    "l2_set_conflict_stall", "l2_bank_conflict"
+    "l2_set_conflict_stall", "l2_bank_conflict",
+    // OOO engine counters (92-98)
+    "int_preg_stall_cycles", "fp_preg_stall_cycles",
+    "retire_width_0_cycles", "retire_width_1_cycles", "retire_width_2_cycles",
+    "retire_width_3_cycles", "retire_width_4_cycles"
 };
 
 extern "C" void tma_counter_store(int tile_id, int idx, uint64_t value) {
