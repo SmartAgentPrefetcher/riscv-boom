@@ -255,7 +255,7 @@ class FetchBundle(implicit p: Parameters) extends BoomBundle
  * Avoids modifying rocket-chip's shared FrontendPerfEvents.
  */
 class BoomFrontendPerfEvents extends FrontendPerfEvents {
-  val lookups = Bool() // I-cache lookups reaching s2 (tag-compare stage); miss-rate denominator
+  val lookups = Bool() // Resolved I-cache lookup outcomes (io.resp.valid || s2_miss); miss-rate denominator
 }
 
 /**

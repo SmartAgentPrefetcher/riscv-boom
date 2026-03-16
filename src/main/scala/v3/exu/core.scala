@@ -907,7 +907,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
 
     // Cache/TLB event counters
     val tma_ctr_icache_miss    = RegInit(0.U(xLen.W))
-    val tma_ctr_icache_lookups = RegInit(0.U(xLen.W)) // I-cache lookups (s2_valid); miss-rate denominator
+    val tma_ctr_icache_lookups = RegInit(0.U(xLen.W)) // Resolved I-cache lookup outcomes (io.resp.valid || s2_miss); miss-rate denominator
     val tma_ctr_dcache_miss  = RegInit(0.U(xLen.W))
     val tma_ctr_dcache_rel   = RegInit(0.U(xLen.W))
     val tma_ctr_itlb_miss    = RegInit(0.U(xLen.W))
@@ -1235,7 +1235,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
       tma_ctr_retire_width_4            // 98: retire_width_4_cycles
     ) ++ Seq(
       // Fetch/decode counters (99)
-      tma_ctr_icache_lookups            // 99: icache_lookups (s2_valid; miss-rate denominator)
+      tma_ctr_icache_lookups            // 99: icache_lookups (io.resp.valid || s2_miss; miss-rate denominator)
     )
     )
   } // end enableTMACounters
