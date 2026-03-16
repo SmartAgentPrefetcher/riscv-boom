@@ -251,6 +251,14 @@ class FetchBundle(implicit p: Parameters) extends BoomBundle
 
 
 /**
+ * BOOM-specific extension of FrontendPerfEvents with I-cache lookup counter.
+ * Avoids modifying rocket-chip's shared FrontendPerfEvents.
+ */
+class BoomFrontendPerfEvents extends FrontendPerfEvents {
+  val lookups = Bool() // I-cache lookups reaching s2 (tag-compare stage); miss-rate denominator
+}
+
+/**
  * IO for the BOOM Frontend to/from the CPU
  */
 class BoomFrontendIO(implicit p: Parameters) extends BoomBundle
@@ -284,7 +292,7 @@ class BoomFrontendIO(implicit p: Parameters) extends BoomBundle
 
   val flush_icache = Output(Bool())
 
-  val perf = Input(new FrontendPerfEvents)
+  val perf = Input(new BoomFrontendPerfEvents)
 }
 
 /**
@@ -338,6 +346,7 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
   io.ptw <> tlb.io.ptw
   io.cpu.perf.tlbMiss := io.ptw.req.fire
   io.cpu.perf.acquire := icache.io.perf.acquire
+  io.cpu.perf.lookups := icache.io.perf.lookups
 
   // --------------------------------------------------------
   // **** NextPC Select (F0) ****

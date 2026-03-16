@@ -115,6 +115,8 @@ import midas.targetutils.SynthesizePrintf
 //   0x308: retire_width_2_cycles
 //   0x310: retire_width_3_cycles
 //   0x318: retire_width_4_cycles
+// --- Fetch/Decode Counters ---
+//   0x320: icache_lookups
 
 object BoomPerfCounterConsts {
   val CORE_NUM_COUNTERS = 60
@@ -122,7 +124,8 @@ object BoomPerfCounterConsts {
   val MEM_ORDER_NUM_COUNTERS = 8
   val DATA_DEP_NUM_COUNTERS = 7
   val OOO_ENGINE_NUM_COUNTERS = 7
-  val NUM_COUNTERS = CORE_NUM_COUNTERS + MEM_ORDER_NUM_COUNTERS + DATA_DEP_NUM_COUNTERS + L2_NUM_COUNTERS + OOO_ENGINE_NUM_COUNTERS // 99
+  val FETCH_DECODE_NUM_COUNTERS = 1
+  val NUM_COUNTERS = CORE_NUM_COUNTERS + MEM_ORDER_NUM_COUNTERS + DATA_DEP_NUM_COUNTERS + L2_NUM_COUNTERS + OOO_ENGINE_NUM_COUNTERS + FETCH_DECODE_NUM_COUNTERS // 100
 }
 
 case class BoomPerfCounterParams(
@@ -209,7 +212,9 @@ class BoomPerfCounterDevice(params: BoomPerfCounterParams, beatBytes: Int)(impli
         // OOO engine counters
         "int_preg_stall_cycles", "fp_preg_stall_cycles",
         "retire_width_0_cycles", "retire_width_1_cycles", "retire_width_2_cycles",
-        "retire_width_3_cycles", "retire_width_4_cycles")
+        "retire_width_3_cycles", "retire_width_4_cycles",
+        // Fetch/decode counters
+        "icache_lookups")
       SynthesizePrintf(printf("===== TMA PERFORMANCE COUNTERS =====\n"))
       for (i <- 0 until BoomPerfCounterConsts.NUM_COUNTERS) {
         SynthesizePrintf(printf(s"  %24s = %%d\n".format(names(i)), io.counters(i)))
