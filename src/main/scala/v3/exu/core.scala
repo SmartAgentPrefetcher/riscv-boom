@@ -906,14 +906,16 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     dontTouch(tma_ctr_rollback_cycles)
 
     // Cache/TLB event counters
-    val tma_ctr_icache_miss  = RegInit(0.U(xLen.W))
+    val tma_ctr_icache_miss    = RegInit(0.U(xLen.W))
+    val tma_ctr_icache_lookups = RegInit(0.U(xLen.W)) // Resolved I-cache lookup outcomes (io.resp.valid || s2_miss); miss-rate denominator
     val tma_ctr_dcache_miss  = RegInit(0.U(xLen.W))
     val tma_ctr_dcache_rel   = RegInit(0.U(xLen.W))
     val tma_ctr_itlb_miss    = RegInit(0.U(xLen.W))
     val tma_ctr_dtlb_miss    = RegInit(0.U(xLen.W))
     val tma_ctr_l2tlb_miss   = RegInit(0.U(xLen.W))
 
-    tma_ctr_icache_miss := tma_ctr_icache_miss + io.ifu.perf.acquire
+    tma_ctr_icache_miss    := tma_ctr_icache_miss + io.ifu.perf.acquire
+    tma_ctr_icache_lookups := tma_ctr_icache_lookups + io.ifu.perf.lookups
     tma_ctr_dcache_miss := tma_ctr_dcache_miss + io.lsu.perf.acquire
     tma_ctr_dcache_rel  := tma_ctr_dcache_rel  + io.lsu.perf.release
     tma_ctr_itlb_miss   := tma_ctr_itlb_miss   + io.ifu.perf.tlbMiss
@@ -921,6 +923,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     tma_ctr_l2tlb_miss  := tma_ctr_l2tlb_miss  + io.ptw.perf.l2miss
 
     dontTouch(tma_ctr_icache_miss)
+    dontTouch(tma_ctr_icache_lookups)
     dontTouch(tma_ctr_dcache_miss)
     dontTouch(tma_ctr_dcache_rel)
     dontTouch(tma_ctr_itlb_miss)
@@ -1230,6 +1233,9 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
       tma_ctr_retire_width_2,           // 96: retire_width_2_cycles
       tma_ctr_retire_width_3,           // 97: retire_width_3_cycles
       tma_ctr_retire_width_4            // 98: retire_width_4_cycles
+    ) ++ Seq(
+      // Fetch/decode counters (99)
+      tma_ctr_icache_lookups            // 99: icache_lookups (io.resp.valid || s2_miss; miss-rate denominator)
     )
     )
   } // end enableTMACounters
