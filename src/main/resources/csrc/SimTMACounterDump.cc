@@ -2,7 +2,7 @@
 #include <cstdint>
 
 #define MAX_TILES 8
-#define NUM_COUNTERS 100
+#define NUM_COUNTERS 109
 
 static uint64_t last_counters[MAX_TILES][NUM_COUNTERS];
 
@@ -49,7 +49,11 @@ static const char* counter_names[NUM_COUNTERS] = {
     "retire_width_0_cycles", "retire_width_1_cycles", "retire_width_2_cycles",
     "retire_width_3_cycles", "retire_width_4_cycles",
     // Fetch/decode counters (99)
-    "icache_lookups"
+    "icache_lookups",
+    // L3 TMA counters (100-108)
+    "l1d_miss_pending", "divider_active",
+    "no_issue", "issued_c1", "issued_c2", "issued_c3",
+    "icache_stall", "itlb_stall", "branch_mispredict_recovery"
 };
 
 extern "C" void tma_counter_store(int tile_id, int idx, uint64_t value) {

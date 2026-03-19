@@ -1142,6 +1142,85 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     dontTouch(tma_ctr_retire_width_3)
     dontTouch(tma_ctr_retire_width_4)
 
+    // --- L3 TMA Counters (100-108) ---
+    // Intel-inspired BOOM-native observability counters.
+    // These are raw occupancy / throughput counters, NOT parent-gated decomposition counters.
+    // The existing TMA L1/L2 parents are slot-based; these L3 counters are cycle-based.
+    // Do not subtract these from slot-based parents without acknowledging the unit mismatch.
+
+    // Memory Bound L3: cycles with at least one demand L1D MSHR in its refill path active.
+    // Uses refill_in_flight which covers the full demand miss handling pipeline
+    // (from MSHR allocation through refill, drain, and metadata write).
+    // This is broader than pure "waiting for refill data" but narrower than "any MSHR allocated"
+    // because it excludes prefetch-only MSHRs.
+    val tma_ctr_l1d_miss_pending = RegInit(0.U(xLen.W))
+    tma_ctr_l1d_miss_pending := tma_ctr_l1d_miss_pending + io.lsu.refill_in_flight
+    dontTouch(tma_ctr_l1d_miss_pending)
+
+    // Core Bound L3: cycles with any divider (INT or FP) busy.
+    // div_busy = !div.io.req.ready || (req.valid && fu_code_is(FU_DIV)), i.e. divider cannot accept new work.
+    val tma_ctr_divider_active = RegInit(0.U(xLen.W))
+    val any_int_div_busy = exe_units.anyDivBusy
+    val any_fp_div_busy  = if (usingFPU) fp_pipeline.io.perf_fdiv_busy else false.B
+    tma_ctr_divider_active := tma_ctr_divider_active + (any_int_div_busy || any_fp_div_busy)
+    dontTouch(tma_ctr_divider_active)
+
+    // Core Bound L3: issue port utilization (INT + FP).
+    // These count cycles by issue-port activity threshold, NOT execution completion.
+    // "issued" = uop leaves issue queue into register-read stage.
+    // Invariant: no_issue + issued_c1 == cycles (every cycle is either 0 or >= 1 issued).
+    // Monotonicity: issued_c3 <= issued_c2 <= issued_c1 <= cycles.
+    // On narrower BOOM configs (e.g. 2-wide), issued_c3 may be rarely active.
+    val int_issue_count = PopCount(VecInit((0 until exe_units.numIrfReaders).map(i => iss_valids(i))))
+    val fp_issue_count  = if (usingFPU) PopCount(fp_pipeline.io.perf_iss_valids) else 0.U
+    val total_issue_count = int_issue_count +& fp_issue_count
+
+    val tma_ctr_no_issue  = RegInit(0.U(xLen.W))
+    val tma_ctr_issued_c1 = RegInit(0.U(xLen.W))
+    val tma_ctr_issued_c2 = RegInit(0.U(xLen.W))
+    val tma_ctr_issued_c3 = RegInit(0.U(xLen.W))
+    tma_ctr_no_issue  := tma_ctr_no_issue  + (total_issue_count === 0.U)
+    tma_ctr_issued_c1 := tma_ctr_issued_c1 + (total_issue_count >= 1.U)
+    tma_ctr_issued_c2 := tma_ctr_issued_c2 + (total_issue_count >= 2.U)
+    tma_ctr_issued_c3 := tma_ctr_issued_c3 + (total_issue_count >= 3.U)
+    dontTouch(tma_ctr_no_issue)
+    dontTouch(tma_ctr_issued_c1)
+    dontTouch(tma_ctr_issued_c2)
+    dontTouch(tma_ctr_issued_c3)
+
+    // Fetch Latency L3: I-cache stall cycles.
+    // Counts cycles where frontend s2 stage has a valid request but I-cache hasn't responded
+    // and it's not a TLB miss (mutually exclusive with itlb_stall in s2).
+    val tma_ctr_icache_stall = RegInit(0.U(xLen.W))
+    tma_ctr_icache_stall := tma_ctr_icache_stall + io.ifu.perf.icacheStall
+    dontTouch(tma_ctr_icache_stall)
+
+    // Fetch Latency L3: I-TLB stall cycles.
+    // Counts cycles where frontend s2 stage has a valid request and ITLB miss is active.
+    // Guarded by s2_valid to avoid counting stale register state.
+    val tma_ctr_itlb_stall = RegInit(0.U(xLen.W))
+    tma_ctr_itlb_stall := tma_ctr_itlb_stall + io.ifu.perf.itlbStall
+    dontTouch(tma_ctr_itlb_stall)
+
+    // Fetch Latency L3: branch mispredict recovery cycles.
+    // Counts cycles where the frontend has not yet delivered a valid fetch packet
+    // after a branch mispredict (b2.mispredict). The FSM arms on b2.mispredict and
+    // clears on the first cycle where fetchpacket.valid is true. Only cycles where
+    // fetchpacket.valid is false while the FSM is armed are counted.
+    // Intentionally scoped to branch mispredicts only, not general frontend resteers
+    // (machine clears, RAS corrections, BTB corrections are excluded).
+    // If a new b2.mispredict fires while already armed, the FSM stays armed (when-priority).
+    val tma_ctr_branch_mispredict_recovery = RegInit(0.U(xLen.W))
+    val in_branch_mispredict_recovery = RegInit(false.B)
+    when (brupdate.b2.mispredict) {
+      in_branch_mispredict_recovery := true.B
+    } .elsewhen (io.ifu.fetchpacket.valid) {
+      in_branch_mispredict_recovery := false.B
+    }
+    tma_ctr_branch_mispredict_recovery := tma_ctr_branch_mispredict_recovery +
+      (in_branch_mispredict_recovery && !io.ifu.fetchpacket.valid)
+    dontTouch(tma_ctr_branch_mispredict_recovery)
+
     // Populate MMIO counter output vector
     io.tma_counters.get := VecInit(Seq(
       debug_tsc_reg,                // 0: cycles
@@ -1236,6 +1315,17 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     ) ++ Seq(
       // Fetch/decode counters (99)
       tma_ctr_icache_lookups            // 99: icache_lookups (io.resp.valid || s2_miss; miss-rate denominator)
+    ) ++ Seq(
+      // L3 TMA counters (100-108): Intel-inspired BOOM-native observability counters
+      tma_ctr_l1d_miss_pending,         // 100: l1d_miss_pending (cycles with demand L1D refill path active)
+      tma_ctr_divider_active,           // 101: divider_active (cycles with any INT/FP divider busy)
+      tma_ctr_no_issue,                 // 102: no_issue (cycles with zero uops issued)
+      tma_ctr_issued_c1,                // 103: issued_c1 (cycles with >= 1 uop issued)
+      tma_ctr_issued_c2,                // 104: issued_c2 (cycles with >= 2 uops issued)
+      tma_ctr_issued_c3,                // 105: issued_c3 (cycles with >= 3 uops issued)
+      tma_ctr_icache_stall,             // 106: icache_stall (cycles frontend stalled on I-cache miss)
+      tma_ctr_itlb_stall,              // 107: itlb_stall (cycles frontend stalled on ITLB miss)
+      tma_ctr_branch_mispredict_recovery // 108: branch_mispredict_recovery (mispredict-to-first-fetch cycles)
     )
     )
   } // end enableTMACounters

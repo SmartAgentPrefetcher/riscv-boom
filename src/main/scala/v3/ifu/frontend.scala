@@ -256,6 +256,8 @@ class FetchBundle(implicit p: Parameters) extends BoomBundle
  */
 class BoomFrontendPerfEvents extends FrontendPerfEvents {
   val lookups = Bool() // Resolved I-cache lookup outcomes (io.resp.valid || s2_miss); miss-rate denominator
+  val icacheStall = Bool() // Cycle-level: frontend stalled on I-cache miss (not TLB miss)
+  val itlbStall = Bool()   // Cycle-level: frontend stalled on I-TLB miss
 }
 
 /**
@@ -459,6 +461,12 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
   val s2_is_replay = RegNext(s1_is_replay) && s2_valid
   val s2_xcpt = s2_valid && (s2_tlb_resp.ae.inst || s2_tlb_resp.pf.inst) && !s2_is_replay
   val f3_ready = Wire(Bool())
+
+  // L3 TMA perf signals: cycle-level stall indicators
+  // icacheStall: s2 has valid request, icache hasn't responded, and it's not a TLB miss
+  io.cpu.perf.icacheStall := s2_valid && !icache.io.resp.valid && !s2_tlb_miss
+  // itlbStall: s2 has valid request and TLB miss is active (guarded by s2_valid to avoid stale register state)
+  io.cpu.perf.itlbStall   := s2_valid && s2_tlb_miss
 
   icache.io.s2_kill := s2_xcpt
 
