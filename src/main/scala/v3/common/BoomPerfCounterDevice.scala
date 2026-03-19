@@ -117,6 +117,16 @@ import midas.targetutils.SynthesizePrintf
 //   0x318: retire_width_4_cycles
 // --- Fetch/Decode Counters ---
 //   0x320: icache_lookups
+// --- L3 TMA Counters (Intel-inspired BOOM-native observability) ---
+//   0x328: l1d_miss_pending
+//   0x330: divider_active
+//   0x338: no_issue
+//   0x340: issued_c1
+//   0x348: issued_c2
+//   0x350: issued_c3
+//   0x358: icache_stall
+//   0x360: itlb_stall
+//   0x368: branch_mispredict_recovery
 
 object BoomPerfCounterConsts {
   val CORE_NUM_COUNTERS = 60
@@ -125,7 +135,8 @@ object BoomPerfCounterConsts {
   val DATA_DEP_NUM_COUNTERS = 7
   val OOO_ENGINE_NUM_COUNTERS = 7
   val FETCH_DECODE_NUM_COUNTERS = 1
-  val NUM_COUNTERS = CORE_NUM_COUNTERS + MEM_ORDER_NUM_COUNTERS + DATA_DEP_NUM_COUNTERS + L2_NUM_COUNTERS + OOO_ENGINE_NUM_COUNTERS + FETCH_DECODE_NUM_COUNTERS // 100
+  val L3_TMA_NUM_COUNTERS = 9
+  val NUM_COUNTERS = CORE_NUM_COUNTERS + MEM_ORDER_NUM_COUNTERS + DATA_DEP_NUM_COUNTERS + L2_NUM_COUNTERS + OOO_ENGINE_NUM_COUNTERS + FETCH_DECODE_NUM_COUNTERS + L3_TMA_NUM_COUNTERS // 109
 }
 
 case class BoomPerfCounterParams(
@@ -214,10 +225,14 @@ class BoomPerfCounterDevice(params: BoomPerfCounterParams, beatBytes: Int)(impli
         "retire_width_0_cycles", "retire_width_1_cycles", "retire_width_2_cycles",
         "retire_width_3_cycles", "retire_width_4_cycles",
         // Fetch/decode counters
-        "icache_lookups")
+        "icache_lookups",
+        // L3 TMA counters
+        "l1d_miss_pending", "divider_active",
+        "no_issue", "issued_c1", "issued_c2", "issued_c3",
+        "icache_stall", "itlb_stall", "branch_mispredict_recovery")
       SynthesizePrintf(printf("===== TMA PERFORMANCE COUNTERS =====\n"))
       for (i <- 0 until BoomPerfCounterConsts.NUM_COUNTERS) {
-        SynthesizePrintf(printf(s"  %24s = %%d\n".format(names(i)), io.counters(i)))
+        SynthesizePrintf(printf(s"  %24s = %%d\n".format(names(i)), readValues(i)))
       }
       SynthesizePrintf(printf("====================================\n"))
     }
