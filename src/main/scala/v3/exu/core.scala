@@ -1303,7 +1303,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
       tma_ctr_issued_with_poison,       // 72
       tma_ctr_ldspec_squash_grants,     // 73
       tma_ctr_spec_ld_wakeup_events     // 74
-    ) ++ Seq.fill(BoomPerfCounterConsts.L2_NUM_COUNTERS)(0.U(xLen.W)) ++ Seq(
+    ) ++ Seq.fill(BoomPerfCounterConsts.L2_INLINE_NUM_COUNTERS)(0.U(xLen.W)) ++ Seq(
       // OOO engine counters (92-98)
       tma_ctr_int_preg_stall,           // 92: int_preg_stall_cycles
       tma_ctr_fp_preg_stall,            // 93: fp_preg_stall_cycles
@@ -1326,6 +1326,9 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
       tma_ctr_icache_stall,             // 106: icache_stall (cycles frontend stalled on I-cache miss)
       tma_ctr_itlb_stall,              // 107: itlb_stall (cycles frontend stalled on ITLB miss)
       tma_ctr_branch_mispredict_recovery // 108: branch_mispredict_recovery (mispredict-to-first-fetch cycles)
+    ) ++ Seq(
+      // L2 extra counter (appended to avoid shifting existing counter indices)
+      0.U(xLen.W)                        // 109: l2_demand_miss_pending (overridden in tile.scala; cycles with demand Acquire outstanding below L2)
     )
     )
   } // end enableTMACounters

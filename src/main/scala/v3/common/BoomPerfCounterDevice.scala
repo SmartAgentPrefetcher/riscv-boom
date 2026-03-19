@@ -127,16 +127,20 @@ import midas.targetutils.SynthesizePrintf
 //   0x358: icache_stall
 //   0x360: itlb_stall
 //   0x368: branch_mispredict_recovery
+// --- L2 Extra Counter (appended to avoid shifting existing indices) ---
+//   0x370: l2_demand_miss_pending (cycles with any demand Acquire outstanding below L2)
 
 object BoomPerfCounterConsts {
   val CORE_NUM_COUNTERS = 60
-  val L2_NUM_COUNTERS = 17
+  val L2_NUM_COUNTERS = 18 // Total L2 counters from InclusiveCache (must match InclusiveCacheParameters.L2_NUM_COUNTERS)
+  val L2_INLINE_NUM_COUNTERS = 17 // L2 counters placed in the inline block (global indices 75-91)
   val MEM_ORDER_NUM_COUNTERS = 8
   val DATA_DEP_NUM_COUNTERS = 7
   val OOO_ENGINE_NUM_COUNTERS = 7
   val FETCH_DECODE_NUM_COUNTERS = 1
   val L3_TMA_NUM_COUNTERS = 9
-  val NUM_COUNTERS = CORE_NUM_COUNTERS + MEM_ORDER_NUM_COUNTERS + DATA_DEP_NUM_COUNTERS + L2_NUM_COUNTERS + OOO_ENGINE_NUM_COUNTERS + FETCH_DECODE_NUM_COUNTERS + L3_TMA_NUM_COUNTERS // 109
+  // Global layout: Core(60) + MemOrder(8) + DataDep(7) + L2Inline(17) + OOO(7) + FetchDecode(1) + L3TMA(9) + L2Extra(1) = 110
+  val NUM_COUNTERS = CORE_NUM_COUNTERS + MEM_ORDER_NUM_COUNTERS + DATA_DEP_NUM_COUNTERS + L2_INLINE_NUM_COUNTERS + OOO_ENGINE_NUM_COUNTERS + FETCH_DECODE_NUM_COUNTERS + L3_TMA_NUM_COUNTERS + (L2_NUM_COUNTERS - L2_INLINE_NUM_COUNTERS) // 110
 }
 
 case class BoomPerfCounterParams(
@@ -229,7 +233,9 @@ class BoomPerfCounterDevice(params: BoomPerfCounterParams, beatBytes: Int)(impli
         // L3 TMA counters
         "l1d_miss_pending", "divider_active",
         "no_issue", "issued_c1", "issued_c2", "issued_c3",
-        "icache_stall", "itlb_stall", "branch_mispredict_recovery")
+        "icache_stall", "itlb_stall", "branch_mispredict_recovery",
+        // L2 extra counter
+        "l2_demand_miss_pending")
       SynthesizePrintf(printf("===== TMA PERFORMANCE COUNTERS =====\n"))
       for (i <- 0 until BoomPerfCounterConsts.NUM_COUNTERS) {
         SynthesizePrintf(printf(s"  %24s = %%d\n".format(names(i)), readValues(i)))
