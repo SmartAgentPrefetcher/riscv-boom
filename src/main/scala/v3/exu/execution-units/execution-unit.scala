@@ -135,9 +135,13 @@ abstract class ExecutionUnit(
 
     // TODO move this out of ExecutionUnit
     val com_exception = if (hasMem || hasRocc) Input(Bool()) else null
+
+    // TMA L3: divider busy (INT div or FP div/sqrt)
+    val perf_div_busy = Output(Bool())
   })
 
   io.req.ready := false.B
+  io.perf_div_busy := false.B // default: no divider
 
   if (writesIrf)   {
     io.iresp.valid := false.B
@@ -252,6 +256,9 @@ class ALUExeUnit(
 
   val div_busy  = WireInit(false.B)
   val ifpu_busy = WireInit(false.B)
+
+  // TMA L3: expose integer divider busy
+  io.perf_div_busy := div_busy
 
   // The Functional Units --------------------
   // Specifically the functional units with fast writeback to IRF
@@ -460,6 +467,9 @@ class FPUExeUnit(
 
   val fdiv_busy = WireInit(false.B)
   val fpiu_busy = WireInit(false.B)
+
+  // TMA L3: expose FP divider busy
+  io.perf_div_busy := fdiv_busy
 
   // The Functional Units --------------------
   val fu_units = ArrayBuffer[FunctionalUnit]()

@@ -51,29 +51,96 @@ import midas.targetutils.SynthesizePrintf
 //   0x130: jalr_mispredict
 //   0x138: br_mispredict_bpd
 //   0x140: br_mispredict_btb
+// --- New Core Counters (Pipeline/Execution, Branch Prediction, Fetch/Decode) ---
+//   0x148: dispatch_slots_valid
+//   0x150: issued_int_total
+//   0x158: issued_mem_total
+//   0x160: issued_mul_total
+//   0x168: issued_div_total
+//   0x170: flush_xcpt_events
+//   0x178: flush_eret_events
+//   0x180: flush_refetch_events
+//   0x188: flush_next_events
+//   0x190: dis_stall_cycles
+//   0x198: br_cond_mispredict
+//   0x1A0: br_indirect_mispredict
+//   0x1A8: br_ret_mispredict
+//   0x1B0: br_no_prediction
+//   0x1B8: fetch_bubble_raw
+//   0x1C0: fetch_slots_delivered
+//   0x1C8: decode_backend_stall
+//   0x1D0: int_iq_empty_cycles
+//   0x1D8: mem_iq_empty_cycles
+//   0x1E0: sfb_opt_events
+// --- Memory Ordering Counters ---
+//   0x1E8: stld_fwd_stall_cycles
+//   0x1F0: stld_fwd_success
+//   0x1F8: stld_fwd_wakeup_retries
+//   0x200: stld_fwd_block_load_wakeup_cycles
+//   0x208: mem_order_failures
+//   0x210: load_ordering_failures
+//   0x218: load_spec_mispredict
+//   0x220: load_nack_retries
+// --- Data Dependency Counters ---
+//   0x228: dep_stall_cycles
+//   0x230: operand_wait_slot_cycles
+//   0x238: iq_dispatched_ready
+//   0x240: iq_dispatched_not_ready
+//   0x248: issued_with_poison
+//   0x250: ldspec_squash_grants
+//   0x258: spec_ld_wakeup_events
 // --- L2 Cache Counters (from InclusiveCache) ---
-//   0x148: l2_pf_hint_req_accepted
-//   0x150: l2_pf_hint_req_blocked_cycles
-//   0x158: l2_pf_hint_alloc_dir_miss
-//   0x160: l2_pf_hint_alloc_dir_hit
-//   0x168: l2_demand_alloc_dir_miss
-//   0x170: l2_demand_alloc_dir_hit_on_prefetched
-//   0x178: l2_demand_alloc_dir_hit_on_pf_brought
-//   0x180: l2_demand_queued_behind_prefetch
-//   0x188: l2_demand_alloc_dir_hit_regular
-//   0x190: l2_secondary_misses
-//   0x198: l2_evictions_dirty
-//   0x1A0: l2_evictions_clean
-//   0x1A8: l2_evictions_prefetched
-//   0x1B0: l2_mshr_occupancy_sum
-//   0x1B8: l2_mshr_full_cycles
-//   0x1C0: l2_set_conflict_stall_cycles
-//   0x1C8: l2_bank_conflict_cycles
+//   0x260: l2_pf_hint_req_accepted
+//   0x268: l2_pf_hint_req_blocked_cycles
+//   0x270: l2_pf_hint_alloc_dir_miss
+//   0x278: l2_pf_hint_alloc_dir_hit
+//   0x280: l2_demand_alloc_dir_miss
+//   0x288: l2_demand_alloc_dir_hit_on_prefetched
+//   0x290: l2_demand_alloc_dir_hit_on_pf_brought
+//   0x298: l2_demand_queued_behind_prefetch
+//   0x2A0: l2_demand_alloc_dir_hit_regular
+//   0x2A8: l2_secondary_misses
+//   0x2B0: l2_evictions_dirty
+//   0x2B8: l2_evictions_clean
+//   0x2C0: l2_evictions_prefetched
+//   0x2C8: l2_mshr_occupancy_sum
+//   0x2D0: l2_mshr_full_cycles
+//   0x2D8: l2_set_conflict_stall_cycles
+//   0x2E0: l2_bank_conflict_cycles
+// --- OOO Engine Counters ---
+//   0x2E8: int_preg_stall_cycles
+//   0x2F0: fp_preg_stall_cycles
+//   0x2F8: retire_width_0_cycles
+//   0x300: retire_width_1_cycles
+//   0x308: retire_width_2_cycles
+//   0x310: retire_width_3_cycles
+//   0x318: retire_width_4_cycles
+// --- Fetch/Decode Counters ---
+//   0x320: icache_lookups
+// --- L3 TMA Counters (Intel-inspired BOOM-native observability) ---
+//   0x328: l1d_miss_pending
+//   0x330: divider_active
+//   0x338: no_issue
+//   0x340: issued_c1
+//   0x348: issued_c2
+//   0x350: issued_c3
+//   0x358: icache_stall
+//   0x360: itlb_stall
+//   0x368: branch_mispredict_recovery
+// --- L2 Extra Counter (appended to avoid shifting existing indices) ---
+//   0x370: l2_demand_miss_pending (cycles with any demand Acquire outstanding below L2)
 
 object BoomPerfCounterConsts {
-  val CORE_NUM_COUNTERS = 40
-  val L2_NUM_COUNTERS = 17
-  val NUM_COUNTERS = CORE_NUM_COUNTERS + L2_NUM_COUNTERS // 57
+  val CORE_NUM_COUNTERS = 60
+  val L2_NUM_COUNTERS = 18 // Total L2 counters from InclusiveCache (must match InclusiveCacheParameters.L2_NUM_COUNTERS)
+  val L2_INLINE_NUM_COUNTERS = 17 // L2 counters placed in the inline block (global indices 75-91)
+  val MEM_ORDER_NUM_COUNTERS = 8
+  val DATA_DEP_NUM_COUNTERS = 7
+  val OOO_ENGINE_NUM_COUNTERS = 7
+  val FETCH_DECODE_NUM_COUNTERS = 1
+  val L3_TMA_NUM_COUNTERS = 9
+  // Global layout: Core(60) + MemOrder(8) + DataDep(7) + L2Inline(17) + OOO(7) + FetchDecode(1) + L3TMA(9) + L2Extra(1) = 110
+  val NUM_COUNTERS = CORE_NUM_COUNTERS + MEM_ORDER_NUM_COUNTERS + DATA_DEP_NUM_COUNTERS + L2_INLINE_NUM_COUNTERS + OOO_ENGINE_NUM_COUNTERS + FETCH_DECODE_NUM_COUNTERS + L3_TMA_NUM_COUNTERS + (L2_NUM_COUNTERS - L2_INLINE_NUM_COUNTERS) // 110
 }
 
 case class BoomPerfCounterParams(
@@ -137,12 +204,40 @@ class BoomPerfCounterDevice(params: BoomPerfCounterParams, beatBytes: Int)(impli
         "icache_miss", "dcache_miss", "dcache_release",
         "itlb_miss", "dtlb_miss", "l2tlb_miss",
         "br_mispredict", "br_resolve", "jalr_mispredict", "br_mispred_bpd", "br_mispred_btb",
+        // New core counters
+        "dispatch_slots_valid",
+        "issued_int_total", "issued_mem_total", "issued_mul_total", "issued_div_total",
+        "flush_xcpt", "flush_eret", "flush_refetch", "flush_next",
+        "dis_stall",
+        "br_cond_mispredict", "br_indirect_mispredict", "br_ret_mispredict", "br_no_prediction",
+        "fetch_bubble_raw", "fetch_slots_delivered", "decode_backend_stall",
+        "int_iq_empty", "mem_iq_empty", "sfb_opt_events",
+        // Memory ordering counters
+        "stld_fwd_stall_cycles", "stld_fwd_success", "stld_fwd_wakeup_retries",
+        "stld_fwd_block_load_wakeup_cycles", "mem_order_failures",
+        "load_ordering_failures", "load_spec_mispredict", "load_nack_retries",
+        // Data dependency counters
+        "dep_stall_cycles", "operand_wait_slot_cycles",
+        "iq_dispatched_ready", "iq_dispatched_not_ready",
+        "issued_with_poison", "ldspec_squash_grants", "spec_ld_wakeup_events",
         // L2 cache counters
         "l2_pf_hint_req_accepted", "l2_pf_hint_req_blocked", "l2_pf_alloc_dir_miss", "l2_pf_alloc_dir_hit",
         "l2_demand_alloc_dir_miss", "l2_demand_hit_prefetched", "l2_demand_hit_pf_brought",
         "l2_demand_queued_behind_pf", "l2_demand_hit_regular",
         "l2_secondary_misses", "l2_evict_dirty", "l2_evict_clean", "l2_evict_prefetched",
-        "l2_mshr_occ_sum", "l2_mshr_full", "l2_set_conflict_stall", "l2_bank_conflict")
+        "l2_mshr_occ_sum", "l2_mshr_full", "l2_set_conflict_stall", "l2_bank_conflict",
+        // OOO engine counters
+        "int_preg_stall_cycles", "fp_preg_stall_cycles",
+        "retire_width_0_cycles", "retire_width_1_cycles", "retire_width_2_cycles",
+        "retire_width_3_cycles", "retire_width_4_cycles",
+        // Fetch/decode counters
+        "icache_lookups",
+        // L3 TMA counters
+        "l1d_miss_pending", "divider_active",
+        "no_issue", "issued_c1", "issued_c2", "issued_c3",
+        "icache_stall", "itlb_stall", "branch_mispredict_recovery",
+        // L2 extra counter
+        "l2_demand_miss_pending")
       SynthesizePrintf(printf("===== TMA PERFORMANCE COUNTERS =====\n"))
       for (i <- 0 until BoomPerfCounterConsts.NUM_COUNTERS) {
         val value = Mux(snapshotValid, io.counters(i) - snapshot(i), io.counters(i))
