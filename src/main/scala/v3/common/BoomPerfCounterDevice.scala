@@ -10,7 +10,7 @@ import midas.targetutils.SynthesizePrintf
 
 // Number of 64-bit counter registers exposed via MMIO
 // Layout (offsets in bytes):
-//   0x000: control   (W: bit 0 = snapshot, bit 1 = release snapshot, R: 0)
+//   0x000: control   (W: bit 0 = snapshot, bit 1 = release snapshot, bit 2 = dump (live - snapshot), R: 0)
 //   0x008: cycles    (debug_tsc_reg)
 //   0x010: instret   (debug_irt_reg)
 //   0x018: tma_retiring
@@ -123,6 +123,8 @@ class BoomPerfCounterDevice(params: BoomPerfCounterParams, beatBytes: Int)(impli
     }
     when (controlWrite(2)) {
       // Dump all counters to simulation console
+      // When a snapshot is active, print (live - snapshot) to isolate the
+      // region between TMA_SNAPSHOT() and TMA_DUMP() calls in software.
       val names = Seq(
         "cycles", "instret",
         "retiring", "bad_speculation", "frontend_bound", "backend_bound",
@@ -143,7 +145,8 @@ class BoomPerfCounterDevice(params: BoomPerfCounterParams, beatBytes: Int)(impli
         "l2_mshr_occ_sum", "l2_mshr_full", "l2_set_conflict_stall", "l2_bank_conflict")
       SynthesizePrintf(printf("===== TMA PERFORMANCE COUNTERS =====\n"))
       for (i <- 0 until BoomPerfCounterConsts.NUM_COUNTERS) {
-        SynthesizePrintf(printf(s"  %24s = %%d\n".format(names(i)), io.counters(i)))
+        val value = Mux(snapshotValid, io.counters(i) - snapshot(i), io.counters(i))
+        SynthesizePrintf(printf(s"  %24s = %%d\n".format(names(i)), value))
       }
       SynthesizePrintf(printf("====================================\n"))
     }
