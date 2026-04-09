@@ -46,7 +46,9 @@ class WithBoomTMACounters extends Config((site, here, up) => {
   case TilesLocated(InSubsystem) => up(TilesLocated(InSubsystem), site) map {
     case tp: BoomTileAttachParams => tp.copy(tileParams = tp.tileParams.copy(core = tp.tileParams.core.copy(
       enableTMACounters = true,
-      enableMemOrderCounters = true
+      enableMemOrderCounters = true,
+      enableDataDepCounters = true,
+      enableOOOEngineCounters = true
     )))
     case other => other
   }
