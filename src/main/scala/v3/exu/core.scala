@@ -995,7 +995,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     tma_ctr_br_cond_mispredict     := tma_ctr_br_cond_mispredict     + (b2.mispredict && b2.cfi_type === CFI_BR)
     tma_ctr_br_indirect_mispredict := tma_ctr_br_indirect_mispredict + (b2.mispredict && b2.cfi_type === CFI_JALR && !tma_ftq1_is_ret)
     tma_ctr_br_ret_mispredict      := tma_ctr_br_ret_mispredict      + (b2.mispredict && b2.cfi_type === CFI_JALR && tma_ftq1_is_ret)
-    tma_ctr_br_no_prediction       := tma_ctr_br_no_prediction       + PopCount(VecInit(brinfos.map(bi => bi.valid && bi.uop.debug_fsrc === BSRC_C)))
+    tma_ctr_br_no_prediction       := tma_ctr_br_no_prediction       + PopCount(VecInit(brinfos.map(bi => bi.valid && bi.uop.debug_tsrc === BSRC_C)))
 
     dontTouch(tma_ctr_br_cond_mispredict)
     dontTouch(tma_ctr_br_indirect_mispredict)
