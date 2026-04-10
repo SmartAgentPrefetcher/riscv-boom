@@ -818,13 +818,27 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     val tma_ctr_memory_bound = RegInit(0.U(xLen.W))
     val tma_ctr_core_bound   = RegInit(0.U(xLen.W))
 
+    // Per-slot signal: this slot's instruction is valid and stalled specifically because the IQ is full
+    val dis_iq_full_stall = (0 until coreWidth).map(w =>
+      dis_valids(w) && (!dispatcher.io.ren_uops(w).ready || rob.io.full || ren_stalls(w)))
+
+    // Per-slot: IQ-full stall while a demand dcache refill is in flight (memory-bound IQ pressure)
+    val dis_iq_full_dcache_miss = (0 until coreWidth).map(w =>
+      (dis_iq_full_stall(w)) && io.lsu.refill_in_flight)
+
+    val refill_blocking_decode = dis_iq_full_dcache_miss.reduce(_||_)
+
     // Use PopCount to correctly count across all slots (`:=` in a for loop
     // would only keep the last slot's increment due to last-connect semantics)
     val mem_bound_slots = PopCount(VecInit((0 until coreWidth).map { w =>
       tma_slot_backend_bound(w) && dis_valids(w) && (
         (io.lsu.ldq_full(w) && dis_uops(w).uses_ldq) ||
         (io.lsu.stq_full(w) && dis_uops(w).uses_stq) ||
-        tma_mem_iq_full)
+        tma_mem_iq_full ||
+        refill_blocking_decode) 
+        // refill_blocking_decode is a heuristic for memory bound 
+        // where the IQs are full (blocking any dispatch) and there
+        // is an outstanding refill request in dcache
     }))
     tma_ctr_memory_bound := tma_ctr_memory_bound + mem_bound_slots
     tma_ctr_core_bound   := tma_ctr_core_bound + (PopCount(tma_slot_backend_bound.asUInt) - mem_bound_slots)
@@ -892,14 +906,16 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     dontTouch(tma_ctr_rollback_cycles)
 
     // Cache/TLB event counters
-    val tma_ctr_icache_miss  = RegInit(0.U(xLen.W))
+    val tma_ctr_icache_miss    = RegInit(0.U(xLen.W))
+    val tma_ctr_icache_lookups = RegInit(0.U(xLen.W)) // Resolved I-cache lookup outcomes (io.resp.valid || s2_miss); miss-rate denominator
     val tma_ctr_dcache_miss  = RegInit(0.U(xLen.W))
     val tma_ctr_dcache_rel   = RegInit(0.U(xLen.W))
     val tma_ctr_itlb_miss    = RegInit(0.U(xLen.W))
     val tma_ctr_dtlb_miss    = RegInit(0.U(xLen.W))
     val tma_ctr_l2tlb_miss   = RegInit(0.U(xLen.W))
 
-    tma_ctr_icache_miss := tma_ctr_icache_miss + io.ifu.perf.acquire
+    tma_ctr_icache_miss    := tma_ctr_icache_miss + io.ifu.perf.acquire
+    tma_ctr_icache_lookups := tma_ctr_icache_lookups + io.ifu.perf.lookups
     tma_ctr_dcache_miss := tma_ctr_dcache_miss + io.lsu.perf.acquire
     tma_ctr_dcache_rel  := tma_ctr_dcache_rel  + io.lsu.perf.release
     tma_ctr_itlb_miss   := tma_ctr_itlb_miss   + io.ifu.perf.tlbMiss
@@ -907,6 +923,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     tma_ctr_l2tlb_miss  := tma_ctr_l2tlb_miss  + io.ptw.perf.l2miss
 
     dontTouch(tma_ctr_icache_miss)
+    dontTouch(tma_ctr_icache_lookups)
     dontTouch(tma_ctr_dcache_miss)
     dontTouch(tma_ctr_dcache_rel)
     dontTouch(tma_ctr_itlb_miss)
@@ -933,6 +950,276 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     dontTouch(tma_ctr_jalr_mispredict)
     dontTouch(tma_ctr_br_mispred_bpd)
     dontTouch(tma_ctr_br_mispred_btb)
+
+    // --- Pipeline & Execution counters ---
+    val tma_ctr_dispatch_slots_valid = RegInit(0.U(xLen.W))
+    val tma_ctr_issued_int           = RegInit(0.U(xLen.W))
+    val tma_ctr_issued_mem           = RegInit(0.U(xLen.W))
+    val tma_ctr_issued_mul           = RegInit(0.U(xLen.W))
+    val tma_ctr_issued_div           = RegInit(0.U(xLen.W))
+    val tma_ctr_flush_xcpt           = RegInit(0.U(xLen.W))
+    val tma_ctr_flush_eret           = RegInit(0.U(xLen.W))
+    val tma_ctr_flush_refetch        = RegInit(0.U(xLen.W))
+    val tma_ctr_flush_next           = RegInit(0.U(xLen.W))
+    val tma_ctr_dis_stall            = RegInit(0.U(xLen.W))
+
+    tma_ctr_dispatch_slots_valid := tma_ctr_dispatch_slots_valid + PopCount(dis_valids)
+    tma_ctr_issued_int  := tma_ctr_issued_int  + PopCount(int_iss_unit.io.iss_valids)
+    tma_ctr_issued_mem  := tma_ctr_issued_mem  + PopCount(mem_iss_unit.io.iss_valids)
+    tma_ctr_issued_mul  := tma_ctr_issued_mul  + PopCount(VecInit((0 until exe_units.numIrfReaders).map(i => iss_valids(i) && iss_uops(i).fu_code_is(FU_MUL))))
+    tma_ctr_issued_div  := tma_ctr_issued_div  + PopCount(VecInit((0 until exe_units.numIrfReaders).map(i => iss_valids(i) && iss_uops(i).fu_code_is(FU_DIV))))
+    tma_ctr_flush_xcpt    := tma_ctr_flush_xcpt    + (rob.io.flush.valid && rob.io.flush.bits.flush_typ === FlushTypes.xcpt)
+    tma_ctr_flush_eret    := tma_ctr_flush_eret    + (rob.io.flush.valid && rob.io.flush.bits.flush_typ === FlushTypes.eret)
+    tma_ctr_flush_refetch := tma_ctr_flush_refetch + (rob.io.flush.valid && rob.io.flush.bits.flush_typ === FlushTypes.refetch)
+    tma_ctr_flush_next    := tma_ctr_flush_next    + (rob.io.flush.valid && rob.io.flush.bits.flush_typ === FlushTypes.next)
+    tma_ctr_dis_stall     := tma_ctr_dis_stall     + !dis_ready
+
+    dontTouch(tma_ctr_dispatch_slots_valid)
+    dontTouch(tma_ctr_issued_int)
+    dontTouch(tma_ctr_issued_mem)
+    dontTouch(tma_ctr_issued_mul)
+    dontTouch(tma_ctr_issued_div)
+    dontTouch(tma_ctr_flush_xcpt)
+    dontTouch(tma_ctr_flush_eret)
+    dontTouch(tma_ctr_flush_refetch)
+    dontTouch(tma_ctr_flush_next)
+    dontTouch(tma_ctr_dis_stall)
+
+    // --- Branch Prediction counters ---
+    val tma_ctr_br_cond_mispredict     = RegInit(0.U(xLen.W))
+    val tma_ctr_br_indirect_mispredict = RegInit(0.U(xLen.W))
+    val tma_ctr_br_ret_mispredict      = RegInit(0.U(xLen.W))
+    val tma_ctr_br_no_prediction       = RegInit(0.U(xLen.W))
+
+    val tma_ftq1_is_ret = io.ifu.get_pc(1).entry.cfi_is_ret
+    tma_ctr_br_cond_mispredict     := tma_ctr_br_cond_mispredict     + (b2.mispredict && b2.cfi_type === CFI_BR)
+    tma_ctr_br_indirect_mispredict := tma_ctr_br_indirect_mispredict + (b2.mispredict && b2.cfi_type === CFI_JALR && !tma_ftq1_is_ret)
+    tma_ctr_br_ret_mispredict      := tma_ctr_br_ret_mispredict      + (b2.mispredict && b2.cfi_type === CFI_JALR && tma_ftq1_is_ret)
+    tma_ctr_br_no_prediction       := tma_ctr_br_no_prediction       + PopCount(VecInit(brinfos.map(bi => bi.valid && bi.uop.debug_tsrc === BSRC_C)))
+
+    dontTouch(tma_ctr_br_cond_mispredict)
+    dontTouch(tma_ctr_br_indirect_mispredict)
+    dontTouch(tma_ctr_br_ret_mispredict)
+    dontTouch(tma_ctr_br_no_prediction)
+
+    // --- Fetch & Decode counters ---
+    val tma_ctr_fetch_bubble_raw      = RegInit(0.U(xLen.W))
+    val tma_ctr_fetch_slots_delivered = RegInit(0.U(xLen.W))
+    val tma_ctr_decode_backend_stall  = RegInit(0.U(xLen.W))
+    val tma_ctr_int_iq_empty          = RegInit(0.U(xLen.W))
+    val tma_ctr_mem_iq_empty          = RegInit(0.U(xLen.W))
+    val tma_ctr_sfb_opt_events        = RegInit(0.U(xLen.W))
+
+    tma_ctr_fetch_bubble_raw      := tma_ctr_fetch_bubble_raw      + !io.ifu.fetchpacket.valid
+    tma_ctr_fetch_slots_delivered := tma_ctr_fetch_slots_delivered + Mux(io.ifu.fetchpacket.valid,
+      PopCount(VecInit((0 until coreWidth).map(w => dec_fbundle.uops(w).valid))), 0.U)
+    tma_ctr_decode_backend_stall  := tma_ctr_decode_backend_stall  + (io.ifu.fetchpacket.valid && !dis_ready)
+    tma_ctr_int_iq_empty          := tma_ctr_int_iq_empty          + int_iss_unit.io.event_empty
+    tma_ctr_mem_iq_empty          := tma_ctr_mem_iq_empty          + mem_iss_unit.io.event_empty
+    tma_ctr_sfb_opt_events        := tma_ctr_sfb_opt_events        + PopCount(VecInit((0 until exe_units.numIrfReaders).map(i => iss_valids(i) && iss_uops(i).is_sfb_br)))
+
+    dontTouch(tma_ctr_fetch_bubble_raw)
+    dontTouch(tma_ctr_fetch_slots_delivered)
+    dontTouch(tma_ctr_decode_backend_stall)
+    dontTouch(tma_ctr_int_iq_empty)
+    dontTouch(tma_ctr_mem_iq_empty)
+    dontTouch(tma_ctr_sfb_opt_events)
+
+    // --- Memory ordering counters (60-67) ---
+    val tma_ctr_stld_fwd_stall_cycles       = RegInit(0.U(xLen.W))
+    val tma_ctr_stld_fwd_success            = RegInit(0.U(xLen.W))
+    val tma_ctr_stld_fwd_wakeup_retries     = RegInit(0.U(xLen.W))
+    val tma_ctr_stld_block_load_wakeup      = RegInit(0.U(xLen.W))
+    val tma_ctr_mem_order_failures          = RegInit(0.U(xLen.W))
+    val tma_ctr_load_ordering_failures      = RegInit(0.U(xLen.W))
+    val tma_ctr_load_spec_mispredict        = RegInit(0.U(xLen.W))
+    val tma_ctr_load_nack_retries           = RegInit(0.U(xLen.W))
+
+    if (boomParams.enableMemOrderCounters) {
+      tma_ctr_stld_fwd_stall_cycles   := tma_ctr_stld_fwd_stall_cycles + io.lsu.perf.stldForwardStall
+      tma_ctr_stld_fwd_success        := tma_ctr_stld_fwd_success + io.lsu.perf.stldForwardSuccess
+      tma_ctr_stld_fwd_wakeup_retries := tma_ctr_stld_fwd_wakeup_retries + io.lsu.perf.stldForwardWakeupRetry
+      tma_ctr_stld_block_load_wakeup  := tma_ctr_stld_block_load_wakeup + io.lsu.perf.stldBlockLoadWakeup
+      tma_ctr_mem_order_failures      := tma_ctr_mem_order_failures +
+        (io.lsu.lxcpt.valid && io.lsu.lxcpt.bits.cause === MINI_EXCEPTION_MEM_ORDERING)
+      tma_ctr_load_ordering_failures  := tma_ctr_load_ordering_failures + io.lsu.perf.loadOrderingFailure
+      tma_ctr_load_spec_mispredict    := tma_ctr_load_spec_mispredict + io.lsu.ld_miss
+      tma_ctr_load_nack_retries       := tma_ctr_load_nack_retries + io.lsu.perf.loadNackRetry
+    }
+
+    dontTouch(tma_ctr_stld_fwd_stall_cycles)
+    dontTouch(tma_ctr_stld_fwd_success)
+    dontTouch(tma_ctr_stld_fwd_wakeup_retries)
+    dontTouch(tma_ctr_stld_block_load_wakeup)
+    dontTouch(tma_ctr_mem_order_failures)
+    dontTouch(tma_ctr_load_ordering_failures)
+    dontTouch(tma_ctr_load_spec_mispredict)
+    dontTouch(tma_ctr_load_nack_retries)
+
+    // --- Data dependency counters (68-74) ---
+    val tma_ctr_dep_stall_cycles         = RegInit(0.U(xLen.W))
+    val tma_ctr_operand_wait_slot_cycles = RegInit(0.U(xLen.W))
+    val tma_ctr_iq_dispatched_ready      = RegInit(0.U(xLen.W))
+    val tma_ctr_iq_dispatched_not_ready  = RegInit(0.U(xLen.W))
+    val tma_ctr_issued_with_poison       = RegInit(0.U(xLen.W))
+    val tma_ctr_ldspec_squash_grants     = RegInit(0.U(xLen.W))
+    val tma_ctr_spec_ld_wakeup_events    = RegInit(0.U(xLen.W))
+
+    if (boomParams.enableDataDepCounters) {
+      val any_dep_stall = issue_units.map(_.io.perf_dep.dep_stall).reduce(_||_)
+      tma_ctr_dep_stall_cycles := tma_ctr_dep_stall_cycles + any_dep_stall
+
+      val total_not_ready = issue_units.map(_.io.perf_dep.not_ready_slots).reduce(_ +& _)
+      tma_ctr_operand_wait_slot_cycles := tma_ctr_operand_wait_slot_cycles + total_not_ready
+
+      val total_disp_ready = issue_units.map(_.io.perf_dep.iq_dispatched_ready).reduce(_ +& _)
+      val total_disp_not_ready = issue_units.map(_.io.perf_dep.iq_dispatched_not_ready).reduce(_ +& _)
+      tma_ctr_iq_dispatched_ready     := tma_ctr_iq_dispatched_ready     + total_disp_ready
+      tma_ctr_iq_dispatched_not_ready := tma_ctr_iq_dispatched_not_ready + total_disp_not_ready
+
+      val total_poison = issue_units.map(_.io.perf_dep.issued_with_poison).reduce(_ +& _)
+      tma_ctr_issued_with_poison := tma_ctr_issued_with_poison + total_poison
+
+      val total_squash = issue_units.map(_.io.perf_dep.squash_grants).reduce(_ +& _)
+      tma_ctr_ldspec_squash_grants := tma_ctr_ldspec_squash_grants + total_squash
+
+      tma_ctr_spec_ld_wakeup_events := tma_ctr_spec_ld_wakeup_events +
+        PopCount(io.lsu.spec_ld_wakeup.map(_.valid))
+    }
+
+    dontTouch(tma_ctr_dep_stall_cycles)
+    dontTouch(tma_ctr_operand_wait_slot_cycles)
+    dontTouch(tma_ctr_iq_dispatched_ready)
+    dontTouch(tma_ctr_iq_dispatched_not_ready)
+    dontTouch(tma_ctr_issued_with_poison)
+    dontTouch(tma_ctr_ldspec_squash_grants)
+    dontTouch(tma_ctr_spec_ld_wakeup_events)
+
+    // OOO engine counters (92-98)
+    // Physical register exhaustion: subset decomposition of rename_stall.
+    // int_preg_stall + fp_preg_stall <= rename_stall (predicate stalls not decomposed).
+    val tma_ctr_int_preg_stall    = RegInit(0.U(xLen.W))
+    val tma_ctr_fp_preg_stall     = RegInit(0.U(xLen.W))
+    // Retirement width distribution: cycles with exactly N instructions retired.
+    // retire_width_0 + ... + retire_width_4 == cycles (for coreWidth <= 4).
+    val tma_ctr_retire_width_0    = RegInit(0.U(xLen.W))
+    val tma_ctr_retire_width_1    = RegInit(0.U(xLen.W))
+    val tma_ctr_retire_width_2    = RegInit(0.U(xLen.W))
+    val tma_ctr_retire_width_3    = RegInit(0.U(xLen.W))
+    val tma_ctr_retire_width_4    = RegInit(0.U(xLen.W))
+
+    if (boomParams.enableOOOEngineCounters) {
+      // INT freelist exhaustion: any slot's INT rename can't allocate
+      val int_ren_stall = rename_stage.io.ren_stalls.reduce(_||_)
+      tma_ctr_int_preg_stall := tma_ctr_int_preg_stall + int_ren_stall
+
+      // FP freelist exhaustion: any slot's FP rename can't allocate
+      if (usingFPU) {
+        val fp_ren_stall = fp_rename_stage.io.ren_stalls.reduce(_||_)
+        tma_ctr_fp_preg_stall := tma_ctr_fp_preg_stall + fp_ren_stall
+      }
+
+      // Retirement width distribution
+      val retire_count = PopCount(rob.io.commit.arch_valids.asUInt)
+      tma_ctr_retire_width_0 := tma_ctr_retire_width_0 + (retire_count === 0.U)
+      tma_ctr_retire_width_1 := tma_ctr_retire_width_1 + (retire_count === 1.U)
+      if (coreWidth >= 2) {
+        tma_ctr_retire_width_2 := tma_ctr_retire_width_2 + (retire_count === 2.U)
+      }
+      if (coreWidth >= 3) {
+        tma_ctr_retire_width_3 := tma_ctr_retire_width_3 + (retire_count === 3.U)
+      }
+      if (coreWidth >= 4) {
+        tma_ctr_retire_width_4 := tma_ctr_retire_width_4 + (retire_count === 4.U)
+      }
+    }
+
+    dontTouch(tma_ctr_int_preg_stall)
+    dontTouch(tma_ctr_fp_preg_stall)
+    dontTouch(tma_ctr_retire_width_0)
+    dontTouch(tma_ctr_retire_width_1)
+    dontTouch(tma_ctr_retire_width_2)
+    dontTouch(tma_ctr_retire_width_3)
+    dontTouch(tma_ctr_retire_width_4)
+
+    // --- L3 TMA Counters (100-108) ---
+    // Intel-inspired BOOM-native observability counters.
+    // These are raw occupancy / throughput counters, NOT parent-gated decomposition counters.
+    // The existing TMA L1/L2 parents are slot-based; these L3 counters are cycle-based.
+    // Do not subtract these from slot-based parents without acknowledging the unit mismatch.
+
+    // Memory Bound L3: cycles with at least one demand L1D MSHR in its refill path active.
+    // Uses refill_in_flight which covers the full demand miss handling pipeline
+    // (from MSHR allocation through refill, drain, and metadata write).
+    // This is broader than pure "waiting for refill data" but narrower than "any MSHR allocated"
+    // because it excludes prefetch-only MSHRs.
+    val tma_ctr_l1d_miss_pending = RegInit(0.U(xLen.W))
+    tma_ctr_l1d_miss_pending := tma_ctr_l1d_miss_pending + io.lsu.refill_in_flight
+    dontTouch(tma_ctr_l1d_miss_pending)
+
+    // Core Bound L3: cycles with any divider (INT or FP) busy.
+    // div_busy = !div.io.req.ready || (req.valid && fu_code_is(FU_DIV)), i.e. divider cannot accept new work.
+    val tma_ctr_divider_active = RegInit(0.U(xLen.W))
+    val any_int_div_busy = exe_units.anyDivBusy
+    val any_fp_div_busy  = if (usingFPU) fp_pipeline.io.perf_fdiv_busy else false.B
+    tma_ctr_divider_active := tma_ctr_divider_active + (any_int_div_busy || any_fp_div_busy)
+    dontTouch(tma_ctr_divider_active)
+
+    // Core Bound L3: issue port utilization (INT + FP).
+    // These count cycles by issue-port activity threshold, NOT execution completion.
+    // "issued" = uop leaves issue queue into register-read stage.
+    // Invariant: no_issue + issued_c1 == cycles (every cycle is either 0 or >= 1 issued).
+    // Monotonicity: issued_c3 <= issued_c2 <= issued_c1 <= cycles.
+    // On narrower BOOM configs (e.g. 2-wide), issued_c3 may be rarely active.
+    val int_issue_count = PopCount(VecInit((0 until exe_units.numIrfReaders).map(i => iss_valids(i))))
+    val fp_issue_count  = if (usingFPU) PopCount(fp_pipeline.io.perf_iss_valids) else 0.U
+    val total_issue_count = int_issue_count +& fp_issue_count
+
+    val tma_ctr_no_issue  = RegInit(0.U(xLen.W))
+    val tma_ctr_issued_c1 = RegInit(0.U(xLen.W))
+    val tma_ctr_issued_c2 = RegInit(0.U(xLen.W))
+    val tma_ctr_issued_c3 = RegInit(0.U(xLen.W))
+    tma_ctr_no_issue  := tma_ctr_no_issue  + (total_issue_count === 0.U)
+    tma_ctr_issued_c1 := tma_ctr_issued_c1 + (total_issue_count >= 1.U)
+    tma_ctr_issued_c2 := tma_ctr_issued_c2 + (total_issue_count >= 2.U)
+    tma_ctr_issued_c3 := tma_ctr_issued_c3 + (total_issue_count >= 3.U)
+    dontTouch(tma_ctr_no_issue)
+    dontTouch(tma_ctr_issued_c1)
+    dontTouch(tma_ctr_issued_c2)
+    dontTouch(tma_ctr_issued_c3)
+
+    // Fetch Latency L3: I-cache stall cycles.
+    // Counts cycles where frontend s2 stage has a valid request but I-cache hasn't responded
+    // and it's not a TLB miss (mutually exclusive with itlb_stall in s2).
+    val tma_ctr_icache_stall = RegInit(0.U(xLen.W))
+    tma_ctr_icache_stall := tma_ctr_icache_stall + io.ifu.perf.icacheStall
+    dontTouch(tma_ctr_icache_stall)
+
+    // Fetch Latency L3: I-TLB stall cycles.
+    // Counts cycles where frontend s2 stage has a valid request and ITLB miss is active.
+    // Guarded by s2_valid to avoid counting stale register state.
+    val tma_ctr_itlb_stall = RegInit(0.U(xLen.W))
+    tma_ctr_itlb_stall := tma_ctr_itlb_stall + io.ifu.perf.itlbStall
+    dontTouch(tma_ctr_itlb_stall)
+
+    // Fetch Latency L3: branch mispredict recovery cycles.
+    // Counts cycles where the frontend has not yet delivered a valid fetch packet
+    // after a branch mispredict (b2.mispredict). The FSM arms on b2.mispredict and
+    // clears on the first cycle where fetchpacket.valid is true. Only cycles where
+    // fetchpacket.valid is false while the FSM is armed are counted.
+    // Intentionally scoped to branch mispredicts only, not general frontend resteers
+    // (machine clears, RAS corrections, BTB corrections are excluded).
+    // If a new b2.mispredict fires while already armed, the FSM stays armed (when-priority).
+    val tma_ctr_branch_mispredict_recovery = RegInit(0.U(xLen.W))
+    val in_branch_mispredict_recovery = RegInit(false.B)
+    when (brupdate.b2.mispredict) {
+      in_branch_mispredict_recovery := true.B
+    } .elsewhen (io.ifu.fetchpacket.valid) {
+      in_branch_mispredict_recovery := false.B
+    }
+    tma_ctr_branch_mispredict_recovery := tma_ctr_branch_mispredict_recovery +
+      (in_branch_mispredict_recovery && !io.ifu.fetchpacket.valid)
+    dontTouch(tma_ctr_branch_mispredict_recovery)
 
     // Populate MMIO counter output vector
     io.tma_counters.get := VecInit(Seq(
@@ -975,8 +1262,74 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
       tma_ctr_br_resolve,           // 36: br_resolve
       tma_ctr_jalr_mispredict,      // 37: jalr_mispredict
       tma_ctr_br_mispred_bpd,       // 38: br_mispredict_bpd
-      tma_ctr_br_mispred_btb        // 39: br_mispredict_btb
-    ) ++ Seq.fill(BoomPerfCounterConsts.L2_NUM_COUNTERS)(0.U(xLen.W)) // 40-56: L2 counter placeholders (overridden by tile)
+      tma_ctr_br_mispred_btb,       // 39: br_mispredict_btb
+      // New core counters (40-59)
+      tma_ctr_dispatch_slots_valid, // 40: dispatch_slots_valid
+      tma_ctr_issued_int,           // 41: issued_int_total
+      tma_ctr_issued_mem,           // 42: issued_mem_total
+      tma_ctr_issued_mul,           // 43: issued_mul_total
+      tma_ctr_issued_div,           // 44: issued_div_total
+      tma_ctr_flush_xcpt,           // 45: flush_xcpt_events
+      tma_ctr_flush_eret,           // 46: flush_eret_events
+      tma_ctr_flush_refetch,        // 47: flush_refetch_events
+      tma_ctr_flush_next,           // 48: flush_next_events
+      tma_ctr_dis_stall,            // 49: dis_stall_cycles
+      tma_ctr_br_cond_mispredict,   // 50: br_cond_mispredict
+      tma_ctr_br_indirect_mispredict, // 51: br_indirect_mispredict
+      tma_ctr_br_ret_mispredict,    // 52: br_ret_mispredict
+      tma_ctr_br_no_prediction,     // 53: br_no_prediction
+      tma_ctr_fetch_bubble_raw,     // 54: fetch_bubble_raw
+      tma_ctr_fetch_slots_delivered,// 55: fetch_slots_delivered
+      tma_ctr_decode_backend_stall, // 56: decode_backend_stall
+      tma_ctr_int_iq_empty,         // 57: int_iq_empty_cycles
+      tma_ctr_mem_iq_empty,         // 58: mem_iq_empty_cycles
+      tma_ctr_sfb_opt_events        // 59: sfb_opt_events
+    ) ++ Seq(
+      // Memory ordering counters (60-67)
+      tma_ctr_stld_fwd_stall_cycles,   // 60
+      tma_ctr_stld_fwd_success,        // 61
+      tma_ctr_stld_fwd_wakeup_retries, // 62
+      tma_ctr_stld_block_load_wakeup,  // 63
+      tma_ctr_mem_order_failures,      // 64
+      tma_ctr_load_ordering_failures,  // 65
+      tma_ctr_load_spec_mispredict,    // 66
+      tma_ctr_load_nack_retries        // 67
+    ) ++ Seq(
+      // Data dependency counters (68-74)
+      tma_ctr_dep_stall_cycles,         // 68
+      tma_ctr_operand_wait_slot_cycles, // 69
+      tma_ctr_iq_dispatched_ready,      // 70
+      tma_ctr_iq_dispatched_not_ready,  // 71
+      tma_ctr_issued_with_poison,       // 72
+      tma_ctr_ldspec_squash_grants,     // 73
+      tma_ctr_spec_ld_wakeup_events     // 74
+    ) ++ Seq.fill(BoomPerfCounterConsts.L2_INLINE_NUM_COUNTERS)(0.U(xLen.W)) ++ Seq(
+      // OOO engine counters (92-98)
+      tma_ctr_int_preg_stall,           // 92: int_preg_stall_cycles
+      tma_ctr_fp_preg_stall,            // 93: fp_preg_stall_cycles
+      tma_ctr_retire_width_0,           // 94: retire_width_0_cycles
+      tma_ctr_retire_width_1,           // 95: retire_width_1_cycles
+      tma_ctr_retire_width_2,           // 96: retire_width_2_cycles
+      tma_ctr_retire_width_3,           // 97: retire_width_3_cycles
+      tma_ctr_retire_width_4            // 98: retire_width_4_cycles
+    ) ++ Seq(
+      // Fetch/decode counters (99)
+      tma_ctr_icache_lookups            // 99: icache_lookups (io.resp.valid || s2_miss; miss-rate denominator)
+    ) ++ Seq(
+      // L3 TMA counters (100-108): Intel-inspired BOOM-native observability counters
+      tma_ctr_l1d_miss_pending,         // 100: l1d_miss_pending (cycles with demand L1D refill path active)
+      tma_ctr_divider_active,           // 101: divider_active (cycles with any INT/FP divider busy)
+      tma_ctr_no_issue,                 // 102: no_issue (cycles with zero uops issued)
+      tma_ctr_issued_c1,                // 103: issued_c1 (cycles with >= 1 uop issued)
+      tma_ctr_issued_c2,                // 104: issued_c2 (cycles with >= 2 uops issued)
+      tma_ctr_issued_c3,                // 105: issued_c3 (cycles with >= 3 uops issued)
+      tma_ctr_icache_stall,             // 106: icache_stall (cycles frontend stalled on I-cache miss)
+      tma_ctr_itlb_stall,              // 107: itlb_stall (cycles frontend stalled on ITLB miss)
+      tma_ctr_branch_mispredict_recovery // 108: branch_mispredict_recovery (mispredict-to-first-fetch cycles)
+    ) ++ Seq(
+      // L2 extra counter (appended to avoid shifting existing counter indices)
+      0.U(xLen.W)                        // 109: l2_demand_miss_pending (overridden in tile.scala; cycles with demand Acquire outstanding below L2)
+    )
     )
   } // end enableTMACounters
 
@@ -1080,6 +1433,8 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
                       || brupdate.b1.mispredict_mask =/= 0.U
                       || brupdate.b2.mispredict
                       || io.ifu.redirect_flush))
+
+
 
 
   io.lsu.fence_dmem := (dis_valids zip wait_for_empty_pipeline).map {case (v,w) => v && w} .reduce(_||_)
