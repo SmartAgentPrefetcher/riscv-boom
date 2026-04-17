@@ -2091,6 +2091,9 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
       }
 
       when (rob.io.commit.arch_valids(w)) {
+        if (COMMIT_LOG_HUMAN_READABLE) {
+          printf("C%d: ", debug_tsc_reg)
+        }
         printf("%d 0x%x ",
           priv,
           Sext(rob.io.commit.uops(w).debug_pc(vaddrBits-1,0), xLen))
