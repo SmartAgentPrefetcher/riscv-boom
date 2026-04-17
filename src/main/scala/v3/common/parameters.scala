@@ -106,6 +106,7 @@ case class BoomCoreParams(
 
   /* debug stuff */
   enableCommitLogPrintf: Boolean = false,
+  enableCommitLogHumanReadable: Boolean = false,
   enableBranchPrintf: Boolean = false,
   enableMemtracePrintf: Boolean = false
 
@@ -297,6 +298,7 @@ trait HasBoomCoreParameters extends freechips.rocketchip.tile.HasCoreParameters
   //***********************************
   // Debug printout parameters
   val COMMIT_LOG_PRINTF   = boomParams.enableCommitLogPrintf // dump commit state, for comparision against ISA sim
+  val COMMIT_LOG_HUMAN_READABLE = boomParams.enableCommitLogHumanReadable // also emit DASM(%x) for spike-dasm disassembly
   val BRANCH_PRINTF       = boomParams.enableBranchPrintf // dump branch predictor results
   val MEMTRACE_PRINTF     = boomParams.enableMemtracePrintf // dump trace of memory accesses to L1D for debugging
 
