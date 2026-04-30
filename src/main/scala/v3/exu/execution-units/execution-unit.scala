@@ -352,7 +352,7 @@ class ALUExeUnit(
 
     // buffer up results since we share write-port on integer regfile.
     val queue = Module(new BranchKillableQueue(new ExeUnitResp(dataWidth),
-      entries = intToFpLatency + 3)) // TODO being overly conservative
+      entries = intToFpLatency + 10)) // TODO being overly conservative
     queue.io.enq.valid       := ifpu.io.resp.valid
     queue.io.enq.bits.uop    := ifpu.io.resp.bits.uop
     queue.io.enq.bits.data   := ifpu.io.resp.bits.data
@@ -545,7 +545,7 @@ class FPUExeUnit(
     // TODO instantiate our own fpiu; and remove it from fpu.scala.
     // buffer up results since we share write-port on integer regfile.
     val queue = Module(new BranchKillableQueue(new ExeUnitResp(dataWidth),
-      entries = dfmaLatency + 3)) // TODO being overly conservative
+      entries = dfmaLatency + 10)) // TODO being overly conservative
     queue.io.enq.valid       := (fpu.io.resp.valid &&
                                  fpu.io.resp.bits.uop.fu_code_is(FU_F2I) &&
                                  fpu.io.resp.bits.uop.uopc =/= uopSTA) // STA means store data gen for floating point
