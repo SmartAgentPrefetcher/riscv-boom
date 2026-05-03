@@ -6,7 +6,7 @@ import org.chipsalliance.cde.config.{Parameters, Field, Config}
 import freechips.rocketchip.diplomacy._
 import freechips.rocketchip.regmapper.{RegField, RegWriteFn}
 import freechips.rocketchip.tilelink._
-import midas.targetutils.SynthesizePrintf
+import midas.targetutils.{SynthesizePrintf, PerfCounter}
 
 // Number of 64-bit counter registers exposed via MMIO
 // Layout (offsets in bytes):
@@ -168,6 +168,73 @@ class BoomPerfCounterDevice(params: BoomPerfCounterParams, beatBytes: Int)(impli
   class BoomPerfCounterDeviceImp(outer: BoomPerfCounterDevice) extends LazyModuleImp(outer) {
     val io = IO(new BoomPerfCounterIO)
 
+    // Tile-id derived from address layout (each tile occupies a 4 KiB region
+    // starting at 0x10030000). Used for AutoCounter labels below so per-tile
+    // counters are distinguishable in AUTOCOUNTERFILE0.csv.
+    val autocounterTileId: Int = ((params.address - 0x10030000L) / 0x1000L).toInt
+
+    // Counter names — single source of truth for the TMA register layout.
+    // Order MUST match BoomPerfCounterConsts indices (0 = cycles, 109 = l2_demand_miss_pending).
+    val counterNames: Seq[String] = Seq(
+      "cycles", "instret",
+      "retiring", "bad_speculation", "frontend_bound", "backend_bound",
+      "fetch_latency", "fetch_bandwidth", "branch_mispredict", "machine_clears",
+      "memory_bound", "core_bound",
+      "retired_loads", "retired_stores", "retired_branches",
+      "retired_jals", "retired_jalrs", "retired_fp", "retired_amo", "retired_system",
+      "rob_full", "ldq_full", "stq_full", "int_iq_full", "mem_iq_full",
+      "branch_mask_full", "rename_stall", "flush_cycles", "rollback_cycles",
+      "icache_miss", "dcache_miss", "dcache_release",
+      "itlb_miss", "dtlb_miss", "l2tlb_miss",
+      "br_mispredict", "br_resolve", "jalr_mispredict", "br_mispred_bpd", "br_mispred_btb",
+      // New core counters
+      "dispatch_slots_valid",
+      "issued_int_total", "issued_mem_total", "issued_mul_total", "issued_div_total",
+      "flush_xcpt", "flush_eret", "flush_refetch", "flush_next",
+      "dis_stall",
+      "br_cond_mispredict", "br_indirect_mispredict", "br_ret_mispredict", "br_no_prediction",
+      "fetch_bubble_raw", "fetch_slots_delivered", "decode_backend_stall",
+      "int_iq_empty", "mem_iq_empty", "sfb_opt_events",
+      // Memory ordering counters
+      "stld_fwd_stall_cycles", "stld_fwd_success", "stld_fwd_wakeup_retries",
+      "stld_fwd_block_load_wakeup_cycles", "mem_order_failures",
+      "load_ordering_failures", "load_spec_mispredict", "load_nack_retries",
+      // Data dependency counters
+      "dep_stall_cycles", "operand_wait_slot_cycles",
+      "iq_dispatched_ready", "iq_dispatched_not_ready",
+      "issued_with_poison", "ldspec_squash_grants", "spec_ld_wakeup_events",
+      // L2 cache counters
+      "l2_pf_hint_req_accepted", "l2_pf_hint_req_blocked", "l2_pf_alloc_dir_miss", "l2_pf_alloc_dir_hit",
+      "l2_demand_alloc_dir_miss", "l2_demand_hit_prefetched", "l2_demand_hit_pf_brought",
+      "l2_demand_queued_behind_pf", "l2_demand_hit_regular",
+      "l2_secondary_misses", "l2_evict_dirty", "l2_evict_clean", "l2_evict_prefetched",
+      "l2_mshr_occ_sum", "l2_mshr_full", "l2_set_conflict_stall", "l2_bank_conflict",
+      // OOO engine counters
+      "int_preg_stall_cycles", "fp_preg_stall_cycles",
+      "retire_width_0_cycles", "retire_width_1_cycles", "retire_width_2_cycles",
+      "retire_width_3_cycles", "retire_width_4_cycles",
+      // Fetch/decode counters
+      "icache_lookups",
+      // L3 TMA counters
+      "l1d_miss_pending", "divider_active",
+      "no_issue", "issued_c1", "issued_c2", "issued_c3",
+      "icache_stall", "itlb_stall", "branch_mispredict_recovery",
+      // L2 extra counter
+      "l2_demand_miss_pending")
+    require(counterNames.length == BoomPerfCounterConsts.NUM_COUNTERS,
+      s"counterNames has ${counterNames.length} entries, expected ${BoomPerfCounterConsts.NUM_COUNTERS}")
+
+    // FireSim AutoCounter integration: emit each TMA counter as an Identity
+    // PerfCounter so the AutoCounter bridge samples the value out-of-band at
+    // +autocounter-readrate cycles. Annotations are no-ops on builds without
+    // WithAutoCounter in PLATFORM_CONFIG, safe to leave always-on.
+    for (i <- 0 until BoomPerfCounterConsts.NUM_COUNTERS) {
+      PerfCounter.identity(
+        io.counters(i),
+        s"tma_t${autocounterTileId}_${counterNames(i)}",
+        s"BOOM tile ${autocounterTileId} TMA counter ${counterNames(i)}")
+    }
+
     // Snapshot registers: when software writes bit 0 of control, latch all counters
     val snapshot = Reg(Vec(BoomPerfCounterConsts.NUM_COUNTERS, UInt(64.W)))
     val snapshotValid = RegInit(false.B)
@@ -222,56 +289,10 @@ class BoomPerfCounterDevice(params: BoomPerfCounterParams, beatBytes: Int)(impli
       // Dump all counters to simulation console
       // When a snapshot is active, print (live - snapshot) to isolate the
       // region between TMA_SNAPSHOT() and TMA_DUMP() calls in software.
-      val names = Seq(
-        "cycles", "instret",
-        "retiring", "bad_speculation", "frontend_bound", "backend_bound",
-        "fetch_latency", "fetch_bandwidth", "branch_mispredict", "machine_clears",
-        "memory_bound", "core_bound",
-        "retired_loads", "retired_stores", "retired_branches",
-        "retired_jals", "retired_jalrs", "retired_fp", "retired_amo", "retired_system",
-        "rob_full", "ldq_full", "stq_full", "int_iq_full", "mem_iq_full",
-        "branch_mask_full", "rename_stall", "flush_cycles", "rollback_cycles",
-        "icache_miss", "dcache_miss", "dcache_release",
-        "itlb_miss", "dtlb_miss", "l2tlb_miss",
-        "br_mispredict", "br_resolve", "jalr_mispredict", "br_mispred_bpd", "br_mispred_btb",
-        // New core counters
-        "dispatch_slots_valid",
-        "issued_int_total", "issued_mem_total", "issued_mul_total", "issued_div_total",
-        "flush_xcpt", "flush_eret", "flush_refetch", "flush_next",
-        "dis_stall",
-        "br_cond_mispredict", "br_indirect_mispredict", "br_ret_mispredict", "br_no_prediction",
-        "fetch_bubble_raw", "fetch_slots_delivered", "decode_backend_stall",
-        "int_iq_empty", "mem_iq_empty", "sfb_opt_events",
-        // Memory ordering counters
-        "stld_fwd_stall_cycles", "stld_fwd_success", "stld_fwd_wakeup_retries",
-        "stld_fwd_block_load_wakeup_cycles", "mem_order_failures",
-        "load_ordering_failures", "load_spec_mispredict", "load_nack_retries",
-        // Data dependency counters
-        "dep_stall_cycles", "operand_wait_slot_cycles",
-        "iq_dispatched_ready", "iq_dispatched_not_ready",
-        "issued_with_poison", "ldspec_squash_grants", "spec_ld_wakeup_events",
-        // L2 cache counters
-        "l2_pf_hint_req_accepted", "l2_pf_hint_req_blocked", "l2_pf_alloc_dir_miss", "l2_pf_alloc_dir_hit",
-        "l2_demand_alloc_dir_miss", "l2_demand_hit_prefetched", "l2_demand_hit_pf_brought",
-        "l2_demand_queued_behind_pf", "l2_demand_hit_regular",
-        "l2_secondary_misses", "l2_evict_dirty", "l2_evict_clean", "l2_evict_prefetched",
-        "l2_mshr_occ_sum", "l2_mshr_full", "l2_set_conflict_stall", "l2_bank_conflict",
-        // OOO engine counters
-        "int_preg_stall_cycles", "fp_preg_stall_cycles",
-        "retire_width_0_cycles", "retire_width_1_cycles", "retire_width_2_cycles",
-        "retire_width_3_cycles", "retire_width_4_cycles",
-        // Fetch/decode counters
-        "icache_lookups",
-        // L3 TMA counters
-        "l1d_miss_pending", "divider_active",
-        "no_issue", "issued_c1", "issued_c2", "issued_c3",
-        "icache_stall", "itlb_stall", "branch_mispredict_recovery",
-        // L2 extra counter
-        "l2_demand_miss_pending")
       SynthesizePrintf(printf("===== TMA PERFORMANCE COUNTERS =====\n"))
       for (i <- 0 until BoomPerfCounterConsts.NUM_COUNTERS) {
         val value = Mux(snapshotValid, io.counters(i) - snapshot(i), io.counters(i))
-        SynthesizePrintf(printf(s"  %24s = %%d\n".format(names(i)), value))
+        SynthesizePrintf(printf(s"  %24s = %%d\n".format(counterNames(i)), value))
       }
       SynthesizePrintf(printf("====================================\n"))
     }
