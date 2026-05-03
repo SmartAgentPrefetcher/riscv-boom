@@ -2079,12 +2079,21 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
       def printf_inst(uop: MicroOp) = {
         when (uop.is_rvc) {
           printf("(0x%x)", uop.debug_inst(15,0))
+          if (COMMIT_LOG_HUMAN_READABLE) {
+            printf(" DASM(%x)", uop.debug_inst(15,0))
+          }
         } .otherwise {
           printf("(0x%x)", uop.debug_inst)
+          if (COMMIT_LOG_HUMAN_READABLE) {
+            printf(" DASM(%x)", uop.debug_inst)
+          }
         }
       }
 
       when (rob.io.commit.arch_valids(w)) {
+        if (COMMIT_LOG_HUMAN_READABLE) {
+          printf("C%d: ", debug_tsc_reg)
+        }
         printf("%d 0x%x ",
           priv,
           Sext(rob.io.commit.uops(w).debug_pc(vaddrBits-1,0), xLen))

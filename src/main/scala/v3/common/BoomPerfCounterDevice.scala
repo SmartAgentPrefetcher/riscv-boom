@@ -129,6 +129,9 @@ import midas.targetutils.SynthesizePrintf
 //   0x368: branch_mispredict_recovery
 // --- L2 Extra Counter (appended to avoid shifting existing indices) ---
 //   0x370: l2_demand_miss_pending (cycles with any demand Acquire outstanding below L2)
+// --- Another control ---
+//   0x378: control2 (W: bit 0 = snapshot2, bit 1 = release snapshot2, R: 0)
+//   0x380: read_select (W: 0 = read default, 1 = read snapshot, 2 = read snapshot2, 3 = read live, R: 0)
 
 object BoomPerfCounterConsts {
   val CORE_NUM_COUNTERS = 60
@@ -169,26 +172,53 @@ class BoomPerfCounterDevice(params: BoomPerfCounterParams, beatBytes: Int)(impli
     val snapshot = Reg(Vec(BoomPerfCounterConsts.NUM_COUNTERS, UInt(64.W)))
     val snapshotValid = RegInit(false.B)
 
-    // Determine which values to read: snapshot if valid, else live counters
+    val snapshot2 = Reg(Vec(BoomPerfCounterConsts.NUM_COUNTERS, UInt(64.W)))
+    val snapshot2Valid = RegInit(false.B)
+
+    // 0x380 read_select: 0 = live, 1 = force snapshot, 2 = force snapshot2.
+    // 64-bit Reg so it reads back cleanly; only low 2 bits affect the Mux.
+    val readSelect = RegInit(0.U(64.W))
+
+    // Determine which values to read based on readSelect
+    // Default (readSelect=0): read live counters from io.counters or snapshot if snapshotValid to be backwards compatible
+    // readSelect=1: read snapshot (ignoring live updates)
+    // readSelect=2: read snapshot2 (independent snapshot for software-printf delta
     val readValues = Wire(Vec(BoomPerfCounterConsts.NUM_COUNTERS, UInt(64.W)))
     for (i <- 0 until BoomPerfCounterConsts.NUM_COUNTERS) {
-      readValues(i) := Mux(snapshotValid, snapshot(i), io.counters(i))
+      readValues(i) := MuxLookup(readSelect(1, 0), Mux(snapshotValid, snapshot(i), io.counters(i)))(Seq(
+        1.U -> snapshot(i),
+        2.U -> snapshot2(i), 
+        3.U -> io.counters(i)
+      ))
     }
 
-    // Control write handler
-    val controlWrite = WireDefault(0.U(64.W))
-    when (controlWrite(0)) {
+    val controlWrite     = RegInit(0.U(64.W))
+    val controlWriteValid = RegInit(false.B)
+    when (controlWrite(0) && controlWriteValid) {
       // Snapshot: latch all counter values
       for (i <- 0 until BoomPerfCounterConsts.NUM_COUNTERS) {
         snapshot(i) := io.counters(i)
       }
       snapshotValid := true.B
     }
-    when (controlWrite(1)) {
+    when (controlWrite(1) && controlWriteValid) {
       // Release snapshot
       snapshotValid := false.B
     }
-    when (controlWrite(2)) {
+
+    // Control2 write handler (independent snapshot2 for software-printf delta)
+    val controlWrite2     = RegInit(0.U(64.W))
+    val controlWrite2Valid = RegInit(false.B)
+    when (controlWrite2(0) && controlWrite2Valid) {
+      for (i <- 0 until BoomPerfCounterConsts.NUM_COUNTERS) {
+        snapshot2(i) := io.counters(i)
+      }
+      snapshot2Valid := true.B
+    }
+    when (controlWrite2(1) && controlWrite2Valid) {
+      snapshot2Valid := false.B
+    }
+    when (controlWrite(2) && controlWriteValid) {
       // Dump all counters to simulation console
       // When a snapshot is active, print (live - snapshot) to isolate the
       // region between TMA_SNAPSHOT() and TMA_DUMP() calls in software.
@@ -246,10 +276,29 @@ class BoomPerfCounterDevice(params: BoomPerfCounterParams, beatBytes: Int)(impli
       SynthesizePrintf(printf("====================================\n"))
     }
 
-    // Build register map: control at 0x000, then counters at 0x008, 0x010, ...
+    // Build register map: control at 0x000, then counters at 0x008..0x370,
+    // then control2 at 0x378 and read_select at 0x380.
     val regmapEntries = Seq(
-      0x000 -> Seq(RegField(64, 0.U(64.W), RegWriteFn((valid, data) => {
-        when (valid) { controlWrite := data }
+      0x000 -> Seq(RegField(64, controlWrite, RegWriteFn((valid, data) => {
+        when (valid) {
+          controlWrite     := data
+          controlWriteValid := true.B
+        } .otherwise {
+          controlWriteValid := false.B
+        }
+        true.B
+      }))),
+      0x378 -> Seq(RegField(64, controlWrite2, RegWriteFn((valid, data) => {
+        when (valid) {
+          controlWrite2     := data
+          controlWrite2Valid := true.B
+        } .otherwise {
+          controlWrite2Valid := false.B
+        }
+        true.B
+      }))),
+      0x380 -> Seq(RegField(64, readSelect, RegWriteFn((valid, data) => {
+        when (valid) { readSelect := data }
         true.B
       })))
     ) ++ (0 until BoomPerfCounterConsts.NUM_COUNTERS).map { i =>
